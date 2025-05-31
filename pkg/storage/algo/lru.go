@@ -113,14 +113,18 @@ func (c *LRUAlgo) evict(ctx context.Context, key uint) {
 			break
 		}
 	}
+	// todo improved eviction by calculating a num of elements for remove
 
 	//log.Info().Msgf("LRU: evicted %d items (mem: %dKB, len: %d)\n", evicted, c.shardedMap.Mem()/1024, c.shardedMap.Len())
 }
 
 func (c *LRUAlgo) evictBatch(ctx context.Context, shardKey uint, num int) int {
 	var evictionsNum int
+
 	s := c.shardedOrderedList[shardKey]
-loop:
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -128,14 +132,13 @@ loop:
 		default:
 			if back := s.Back(); evictionsNum < num && back != nil {
 				c.shardedMap.Del(back.Value.(*model.Request).UniqueKey())
-				c.removeBack(shardKey, back)
+				s.Remove(back)
 				evictionsNum++
-				continue loop
+			} else {
+				return evictionsNum
 			}
-			break loop
 		}
 	}
-	return evictionsNum
 }
 
 func (c *LRUAlgo) recordHit(shardKey uint, resp *model.Response) {
@@ -164,11 +167,4 @@ func (c *LRUAlgo) pushToFront(shardKey uint, req *model.Request) *list.Element {
 	defer s.mu.Unlock()
 	el := s.PushFront(req)
 	return el
-}
-
-func (c *LRUAlgo) removeBack(shardKey uint, back *list.Element) {
-	s := c.shardedOrderedList[shardKey]
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.Remove(back)
 }
