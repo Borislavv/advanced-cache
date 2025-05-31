@@ -13,7 +13,7 @@ const nameToken = "name"
 
 type Response struct {
 	mu                 *sync.RWMutex
-	item               *list.Element
+	listElement        *list.Element
 	request            *Request
 	data               []byte
 	tags               []string
@@ -32,7 +32,7 @@ func NewResponse(item *list.Element, req *Request, data []byte, revalidateInterv
 	return &Response{
 		mu:                 &sync.RWMutex{},
 		request:            req,
-		item:               item,
+		listElement:        item,
 		data:               data,
 		tags:               tags,
 		frequency:          0,
@@ -127,12 +127,12 @@ func (r *Response) Touch() {
 func (r *Response) GetListElement() *list.Element {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.item
+	return r.listElement
 }
 func (r *Response) SetListElement(el *list.Element) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.item = el
+	r.listElement = el
 }
 func (r *Response) Copy(source *Response) *Response {
 	request := source.GetRequest()
@@ -141,6 +141,9 @@ func (r *Response) Copy(source *Response) *Response {
 	data := source.GetData()
 	tags := source.GetTags()
 	revalidatedAt := source.GetRevalidatedAt()
+	listElement := source.GetListElement()
+	revalidateInterval := source.GetRevalidateInterval()
+	createdAt := source.GetCreatedAt()
 
 	r.mu.Lock()
 	r.request = request
@@ -149,6 +152,9 @@ func (r *Response) Copy(source *Response) *Response {
 	r.data = data
 	r.tags = tags
 	r.revalidatedAt = revalidatedAt
+	r.listElement = listElement
+	r.revalidateInterval = revalidateInterval
+	r.createdAt = createdAt
 	r.mu.Unlock()
 
 	return r
