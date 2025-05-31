@@ -9,12 +9,12 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/algo"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"net/http"
 	"os"
 	"strconv"
 	"time"
 )
 import _ "net/http/pprof"
-import "net/http"
 
 var reqs []*model.Request
 var store *storage.AlgoStorage
@@ -26,7 +26,7 @@ func init() {
 
 	store = storage.New(config.Storage{
 		EvictionAlgo:               string(algo.LRU),
-		MemoryFillThreshold:        0.9,
+		MemoryFillThreshold:        0.85,
 		MemoryLimit:                1024 * 1024 * 10,
 		ParallelEvictionsAvailable: 10,
 	}, 100)
