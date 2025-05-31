@@ -25,7 +25,7 @@ func BenchmarkReadFromCluster(b *testing.B) {
 	s := storage.New(config.Storage{
 		EvictionAlgo:               string(algo.LRU),
 		MemoryFillThreshold:        0.9,
-		MemoryLimit:                1024 * 1024 * 10,
+		MemoryLimit:                1024 * 1024 * 128,
 		ParallelEvictionsAvailable: 10,
 	}, 100)
 
@@ -57,7 +57,7 @@ func BenchmarkWriteIntoCluster(b *testing.B) {
 	s := storage.New(config.Storage{
 		EvictionAlgo:               string(algo.LRU),
 		MemoryFillThreshold:        0.9,
-		MemoryLimit:                1024 * 1024 * 10,
+		MemoryLimit:                1024 * 1024 * 128,
 		ParallelEvictionsAvailable: 10,
 	}, 100)
 
