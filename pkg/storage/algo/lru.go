@@ -7,7 +7,6 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
 	"math"
-	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -18,6 +17,22 @@ const (
 	maxEvictionIterations = 10
 )
 
+type OrderedList struct {
+	mu *sync.Mutex
+	*list.List
+}
+
+func NewOrderedList() *OrderedList {
+	return &OrderedList{
+		mu:   new(sync.Mutex),
+		List: list.New(),
+	}
+}
+
+func (l *OrderedList) Size() uintptr {
+	return 0
+}
+
 type LRUAlgo struct {
 	cfg config.Storage
 
@@ -25,83 +40,75 @@ type LRUAlgo struct {
 	evictionThreshold uintptr
 	activeEvictors    *atomic.Int32
 
-	// orderedList mutex and semaphore
-	mu     *sync.Mutex
 	semaCh chan struct{}
 	// list from newest to oldest
-	orderedList *list.List
-
-	stringBuildersPool *sync.Pool
+	shardedOrderedList [sharded.ShardCount]*OrderedList
 }
 
 func NewLRU(cfg config.Storage, defaultLen int) *LRUAlgo {
-	return &LRUAlgo{
+	lru := &LRUAlgo{
 		cfg:               cfg,
 		shardedMap:        sharded.NewMap[uint64, *model.Response](defaultLen),
-		evictionThreshold: uintptr(math.Round(cfg.MemoryLimit * cfg.MemoryFillThreshold)),
-		mu:                &sync.Mutex{},
-		activeEvictors:    &atomic.Int32{},
 		semaCh:            make(chan struct{}, cfg.ParallelEvictionsAvailable),
-		orderedList:       list.New(),
-		stringBuildersPool: &sync.Pool{
-			New: func() interface{} {
-				return &strings.Builder{}
-			},
-		},
+		evictionThreshold: uintptr(math.Round(cfg.MemoryLimit * cfg.MemoryFillThreshold)),
+		activeEvictors:    &atomic.Int32{},
 	}
+
+	for i := 0; i < sharded.ShardCount; i++ {
+		lru.shardedOrderedList[i] = NewOrderedList()
+	}
+
+	return lru
 }
 
 func (c *LRUAlgo) Get(req *model.Request) (resp *model.Response, found bool) {
-	b := c.stringBuildersPool.Get().(*strings.Builder)
-	defer c.stringBuildersPool.Put(b)
+	key := req.UniqueKey()
+	shardKey := c.shardedMap.GetShardKey(key)
 
-	resp, found = c.shardedMap.Get(req.UniqueKey(b))
+	resp, found = c.shardedMap.Get(key, shardKey)
 	if !found {
 		return nil, false
 	}
 
-	c.recordHit(resp)
+	c.recordHit(shardKey, resp)
 
 	return resp, true
 }
 
 func (c *LRUAlgo) Set(ctx context.Context, resp *model.Response) {
-	b := c.stringBuildersPool.Get().(*strings.Builder)
-	defer c.stringBuildersPool.Put(b)
+	key := resp.GetRequest().UniqueKey()
+	shardKey := c.shardedMap.GetShardKey(key)
 
-	key := resp.GetRequest().UniqueKey(b)
-	r, found := c.shardedMap.Get(key)
+	r, found := c.shardedMap.Get(key, shardKey)
 	if found {
-		c.recordHit(r)
-		r.Copy(resp)
+		c.recordHit(shardKey, r)
+		r.SetMeta(resp.GetMeta())
 		return
 	}
 
 	if c.isEvictionNecessaryAndAvailable() {
-		go c.evict(ctx)
+		go c.evict(ctx, shardKey)
 	}
 
-	c.recordPush(resp)
+	c.recordPush(shardKey, resp)
 	c.shardedMap.Set(key, resp)
 }
 
 func (c *LRUAlgo) Del(req *model.Request) {
-	b := c.stringBuildersPool.Get().(*strings.Builder)
-	defer c.stringBuildersPool.Put(b)
-	c.shardedMap.Del(req.UniqueKey(b))
+	c.shardedMap.Del(req.UniqueKey())
 }
 
 func (c *LRUAlgo) isEvictionNecessaryAndAvailable() bool {
 	return c.shardedMap.Mem() > c.evictionThreshold && c.activeEvictors.Load() < maxEvictors
 }
 
-func (c *LRUAlgo) evict(ctx context.Context) {
+func (c *LRUAlgo) evict(ctx context.Context, key uint) {
 	c.activeEvictors.Add(1)
 	defer c.activeEvictors.Add(-1)
 
 	evicted := 0
 	for i := 0; i < maxEvictionIterations; i++ {
-		evicted += c.evictBatch(ctx, maxEvictionsPreIter)
+		evicted += c.evictBatch(ctx, key, maxEvictionsPreIter)
 		if c.shardedMap.Mem() < c.evictionThreshold {
 			break
 		}
@@ -110,20 +117,18 @@ func (c *LRUAlgo) evict(ctx context.Context) {
 	//log.Info().Msgf("LRU: evicted %d items (mem: %dKB, len: %d)\n", evicted, c.shardedMap.Mem()/1024, c.shardedMap.Len())
 }
 
-func (c *LRUAlgo) evictBatch(ctx context.Context, num int) int {
-	b := c.stringBuildersPool.Get().(*strings.Builder)
-	defer c.stringBuildersPool.Put(b)
-
+func (c *LRUAlgo) evictBatch(ctx context.Context, shardKey uint, num int) int {
 	var evictionsNum int
+	s := c.shardedOrderedList[shardKey]
 loop:
 	for {
 		select {
 		case <-ctx.Done():
 			return evictionsNum
 		default:
-			if back := c.orderedList.Back(); evictionsNum < num && back != nil {
-				c.shardedMap.Del(back.Value.(*model.Request).UniqueKey(b))
-				c.removeBack(back)
+			if back := s.Back(); evictionsNum < num && back != nil {
+				c.shardedMap.Del(back.Value.(*model.Request).UniqueKey())
+				c.removeBack(shardKey, back)
 				evictionsNum++
 				continue loop
 			}
@@ -133,37 +138,37 @@ loop:
 	return evictionsNum
 }
 
-func (c *LRUAlgo) recordHit(resp *model.Response) {
+func (c *LRUAlgo) recordHit(shardKey uint, resp *model.Response) {
 	resp.Touch()
 
 	el := resp.GetListElement()
 
-	c.moveToFront(el)
+	c.moveToFront(shardKey, el)
 }
 
-func (c *LRUAlgo) recordPush(resp *model.Response) {
+func (c *LRUAlgo) recordPush(shardKey uint, resp *model.Response) {
 	resp.Touch()
-
-	el := c.pushToFront(resp.GetRequest())
-
-	resp.SetListElement(el)
+	resp.SetListElement(c.pushToFront(shardKey, resp.GetRequest()))
 }
 
-func (c *LRUAlgo) moveToFront(el *list.Element) {
-	c.mu.Lock()
-	c.orderedList.MoveToFront(el)
-	c.mu.Unlock()
+func (c *LRUAlgo) moveToFront(shardKey uint, el *list.Element) {
+	s := c.shardedOrderedList[shardKey]
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.MoveToFront(el)
 }
 
-func (c *LRUAlgo) pushToFront(req *model.Request) *list.Element {
-	c.mu.Lock()
-	el := c.orderedList.PushFront(req)
-	c.mu.Unlock()
+func (c *LRUAlgo) pushToFront(shardKey uint, req *model.Request) *list.Element {
+	s := c.shardedOrderedList[shardKey]
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	el := s.PushFront(req)
 	return el
 }
 
-func (c *LRUAlgo) removeBack(back *list.Element) {
-	c.mu.Lock()
-	c.orderedList.Remove(back)
-	c.mu.Unlock()
+func (c *LRUAlgo) removeBack(shardKey uint, back *list.Element) {
+	s := c.shardedOrderedList[shardKey]
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Remove(back)
 }

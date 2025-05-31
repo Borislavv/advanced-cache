@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 )
 
-const shardCount = 1024
+const ShardCount = 48
 
 type Sizer interface {
 	Size() uintptr
@@ -18,7 +18,7 @@ type (
 	Map[K comparable, V Sizer] struct {
 		len        *atomic.Int64
 		mem        *atomic.Uintptr
-		shards     [shardCount]*shard[K, V]
+		shards     [ShardCount]*shard[K, V]
 		hasherPool *sync.Pool // pool of hash/fnv (hash.Hash64)
 	}
 
@@ -37,12 +37,28 @@ func NewMap[K comparable, V Sizer](defaultLen int) *Map[K, V] {
 		},
 	}
 
-	for i := 0; i < shardCount; i++ {
+	for i := 0; i < ShardCount; i++ {
 		m.shards[i] = &shard[K, V]{items: make(map[K]V, defaultLen)}
 	}
 	return m
 }
 
+func (m *Map[K, V]) GetShardKey(key K) uint {
+	h := m.hasherPool.Get().(hash.Hash64)
+	defer func() {
+		h.Reset()
+		m.hasherPool.Put(h)
+	}()
+	_, _ = h.Write(m.key(key))
+	return uint(h.Sum64()) % ShardCount
+}
+
+// getShardByKey - searches shard by its own key.
+func (m *Map[K, V]) getShardByKey(key uint) *shard[K, V] {
+	return m.shards[key]
+}
+
+// getShard - searches shard by request unique key.
 func (m *Map[K, V]) getShard(key K) *shard[K, V] {
 	h := m.hasherPool.Get().(hash.Hash64)
 	defer func() {
@@ -50,7 +66,7 @@ func (m *Map[K, V]) getShard(key K) *shard[K, V] {
 		m.hasherPool.Put(h)
 	}()
 	_, _ = h.Write(m.key(key))
-	return m.shards[uint(h.Sum64())%shardCount]
+	return m.shards[uint(h.Sum64())%ShardCount]
 }
 
 func (m *Map[K, V]) Set(key K, value V) {
@@ -62,8 +78,8 @@ func (m *Map[K, V]) Set(key K, value V) {
 	s.Unlock()
 }
 
-func (m *Map[K, V]) Get(key K) (V, bool) {
-	s := m.getShard(key)
+func (m *Map[K, V]) Get(key K, shardKey uint) (value V, found bool) {
+	s := m.getShardByKey(shardKey)
 	s.RLock()
 	v, ok := s.items[key]
 	s.RUnlock()
@@ -92,7 +108,7 @@ func (m *Map[K, V]) Has(key K) bool {
 
 func (m *Map[K, V]) Rng(fn func(K, V)) {
 	var wg sync.WaitGroup
-	wg.Add(shardCount)
+	wg.Add(ShardCount)
 	for _, s := range m.shards {
 		go func(s *shard[K, V]) {
 			defer wg.Done()
@@ -114,22 +130,32 @@ func (m *Map[K, V]) Len() int64 {
 	return m.len.Load()
 }
 
-func (m *Map[K, V]) key(key any, bufPool *sync.Pool) []byte {
+func (m *Map[K, V]) key(key any) []byte {
 	switch x := key.(type) {
 	case string:
 		return []byte(x)
 	case int:
+		buf := make([]byte, 8)
+		binary.LittleEndian.PutUint64(buf, uint64(x))
+		return buf
 	case int64:
+		buf := make([]byte, 8)
+		binary.LittleEndian.PutUint64(buf, uint64(x))
+		return buf
 	case int32:
+		buf := make([]byte, 8)
+		binary.LittleEndian.PutUint64(buf, uint64(x))
+		return buf
 	case uint:
+		buf := make([]byte, 8)
+		binary.LittleEndian.PutUint64(buf, uint64(x))
+		return buf
 	case uintptr:
-		buf := bufPool.Get().([]byte)
-		defer bufPool.Put(buf)
+		buf := make([]byte, 8)
 		binary.LittleEndian.PutUint64(buf, uint64(x))
 		return buf
 	case uint64:
-		buf := bufPool.Get().([]byte)
-		defer bufPool.Put(buf)
+		buf := make([]byte, 8)
 		binary.LittleEndian.PutUint64(buf, x)
 		return buf
 	case float64:

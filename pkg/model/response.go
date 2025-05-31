@@ -12,14 +12,18 @@ import (
 const nameToken = "name"
 
 type Response struct {
-	mu                 *sync.RWMutex
-	listElement        *list.Element
+	Meta
+	mu          *sync.RWMutex
+	listElement *list.Element
+	lastAccess  time.Time
+	createdAt   time.Time
+}
+
+type Meta struct {
 	request            *Request
+	frequency          int // number of times of response was accessed
 	data               []byte
 	tags               []string
-	frequency          int // number of times of response was accessed
-	createdAt          time.Time
-	lastAccess         time.Time
 	revalidatedAt      time.Time
 	revalidateInterval time.Duration
 }
@@ -30,16 +34,17 @@ func NewResponse(item *list.Element, req *Request, data []byte, revalidateInterv
 		return nil, fmt.Errorf("cannot extract tags from choice: %s", err.Error())
 	}
 	return &Response{
-		mu:                 &sync.RWMutex{},
-		request:            req,
-		listElement:        item,
-		data:               data,
-		tags:               tags,
-		frequency:          0,
-		createdAt:          time.Now(),
-		lastAccess:         time.Now(),
-		revalidatedAt:      time.Now(),
-		revalidateInterval: revalidateInterval,
+		mu:          &sync.RWMutex{},
+		listElement: item,
+		createdAt:   time.Now(),
+		lastAccess:  time.Now(),
+		Meta: Meta{
+			request:            req,
+			data:               data,
+			tags:               tags,
+			revalidatedAt:      time.Now(),
+			revalidateInterval: revalidateInterval,
+		},
 	}, nil
 }
 func (r *Response) GetRequest() *Request {
@@ -134,31 +139,19 @@ func (r *Response) SetListElement(el *list.Element) {
 	defer r.mu.Unlock()
 	r.listElement = el
 }
-func (r *Response) Copy(source *Response) *Response {
-	request := source.GetRequest()
-	frequency := source.GetFrequency()
-	lastAccess := source.GetLastAccess()
-	data := source.GetData()
-	tags := source.GetTags()
-	revalidatedAt := source.GetRevalidatedAt()
-	listElement := source.GetListElement()
-	revalidateInterval := source.GetRevalidateInterval()
-	createdAt := source.GetCreatedAt()
 
-	r.mu.Lock()
-	r.request = request
-	r.frequency = frequency
-	r.lastAccess = lastAccess
-	r.data = data
-	r.tags = tags
-	r.revalidatedAt = revalidatedAt
-	r.listElement = listElement
-	r.revalidateInterval = revalidateInterval
-	r.createdAt = createdAt
-	r.mu.Unlock()
-
-	return r
+func (r *Response) GetMeta() Meta {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.Meta
 }
+
+func (r *Response) SetMeta(meta Meta) {
+	r.mu.Lock()
+	r.Meta = meta
+	r.mu.Unlock()
+}
+
 func (r *Response) Size() uintptr {
 	return unsafe.Sizeof(*r)
 }

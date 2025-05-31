@@ -2,7 +2,6 @@ package model
 
 import (
 	"github.com/zeebo/xxh3"
-	"strings"
 	"sync"
 )
 
@@ -47,37 +46,15 @@ func (r *Request) GetChoice() string {
 	defer r.mu.RUnlock()
 	return r.choice
 }
-func (r *Request) String(b *strings.Builder) string {
+func (r *Request) String() string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-
-	if r.uniqueString != "" {
-		return r.uniqueString
-	}
-
-	l := 3
-	l += len(r.project)
-	l += len(r.domain)
-	l += len(r.language)
-	l += len(r.choice)
-
-	b.Grow(l)
-
-	b.WriteString(r.project)
-	b.WriteString(",")
-	b.WriteString(r.domain)
-	b.WriteString(",")
-	b.WriteString(r.language)
-	b.WriteString(",")
-	b.WriteString(r.choice)
-	r.uniqueString = b.String()
-
-	b.Reset()
+	r.uniqueString = r.project + "," + r.domain + "," + r.language + "," + r.choice
 	return r.uniqueString
 }
-func (r *Request) UniqueKey(b *strings.Builder) uint64 {
+func (r *Request) UniqueKey() uint64 {
 	if r.uniqueKey == 0 {
-		r.uniqueKey = xxh3.HashString(r.String(b))
+		r.uniqueKey = xxh3.HashString(r.String())
 	}
 	return r.uniqueKey
 }
