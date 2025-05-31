@@ -2,10 +2,8 @@ package model
 
 import (
 	"container/list"
-	"encoding/json"
 	"fmt"
-	"io"
-	"strings"
+	"github.com/buger/jsonparser"
 	"sync"
 	"time"
 	"unsafe"
@@ -159,31 +157,15 @@ func (r *Response) Size() uintptr {
 	return unsafe.Sizeof(*r)
 }
 func ExtractTags(choice string) ([]string, error) {
-	var names []string
-	var expectValue bool
+	names := make([]string, 0, 7)
 
-	decoder := json.NewDecoder(strings.NewReader(choice))
-
-	for {
-		t, err := decoder.Token()
-		if err == io.EOF {
-			break
+	if err := jsonparser.ObjectEach([]byte(choice), func(key []byte, value []byte, dataType jsonparser.ValueType, offset int) error {
+		if string(key) == nameToken {
+			names = append(names, string(value))
 		}
-		if err != nil {
-			return nil, err
-		}
-
-		switch token := t.(type) {
-		case string:
-			if expectValue {
-				names = append(names, token)
-				expectValue = false
-			} else if token == nameToken {
-				expectValue = true
-			}
-		default:
-			expectValue = false
-		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	return names, nil

@@ -1,8 +1,8 @@
 package sharded
 
 import (
+	"encoding/binary"
 	"hash/fnv"
-	"strconv"
 	"sync"
 	"sync/atomic"
 )
@@ -36,7 +36,7 @@ func NewMap[K comparable, V Sizer](defaultLen int) *Map[K, V] {
 
 func (m *Map[K, V]) getShard(key K) *shard[K, V] {
 	hash := fnv.New32a()
-	_, _ = hash.Write([]byte(m.key(key)))
+	_, _ = hash.Write(m.key(key))
 	return m.shards[uint(hash.Sum32())%shardCount]
 }
 
@@ -101,28 +101,40 @@ func (m *Map[K, V]) Len() int64 {
 	return m.len.Load()
 }
 
-func (m *Map[K, V]) key(key any) string {
+func (m *Map[K, V]) key(key any) []byte {
 	switch x := key.(type) {
 	case string:
-		return x
+		return []byte(x)
 	case int:
-		return strconv.Itoa(x)
+		buf := make([]byte, 8)
+		binary.LittleEndian.PutUint64(buf, uint64(x))
+		return buf
 	case int64:
-		return strconv.FormatInt(x, 10)
+		buf := make([]byte, 8)
+		binary.LittleEndian.PutUint64(buf, uint64(x))
+		return buf
 	case int32:
-		return strconv.FormatInt(int64(x), 10)
+		buf := make([]byte, 8)
+		binary.LittleEndian.PutUint64(buf, uint64(x))
+		return buf
 	case uint:
-		return strconv.FormatUint(uint64(x), 10)
+		buf := make([]byte, 8)
+		binary.LittleEndian.PutUint64(buf, uint64(x))
+		return buf
 	case uint64:
-		return strconv.FormatUint(x, 10)
+		buf := make([]byte, 8)
+		binary.LittleEndian.PutUint64(buf, x)
+		return buf
 	case float64:
-		return strconv.FormatFloat(x, 'f', -1, 64)
+		panic("float is not available")
 	case float32:
-		return strconv.FormatFloat(float64(x), 'f', -1, 32)
+		panic("float is not available")
 	case bool:
-		return strconv.FormatBool(x)
+		panic("bool is not available")
 	case uintptr:
-		return strconv.FormatUint(uint64(x), 10)
+		buf := make([]byte, 8)
+		binary.LittleEndian.PutUint64(buf, uint64(x))
+		return buf
 	default:
 		panic("unsupported key type")
 	}
