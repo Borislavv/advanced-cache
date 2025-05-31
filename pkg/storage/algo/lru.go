@@ -6,8 +6,8 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
-	"github.com/rs/zerolog/log"
 	"math"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -19,15 +19,19 @@ const (
 )
 
 type LRUAlgo struct {
-	cfg               config.Storage
+	cfg config.Storage
+
 	shardedMap        *sharded.Map[uint64, *model.Response]
 	evictionThreshold uintptr
 	activeEvictors    *atomic.Int32
+
 	// orderedList mutex and semaphore
 	mu     *sync.Mutex
 	semaCh chan struct{}
 	// list from newest to oldest
 	orderedList *list.List
+
+	stringBuildersPool *sync.Pool
 }
 
 func NewLRU(cfg config.Storage, defaultLen int) *LRUAlgo {
@@ -39,11 +43,19 @@ func NewLRU(cfg config.Storage, defaultLen int) *LRUAlgo {
 		activeEvictors:    &atomic.Int32{},
 		semaCh:            make(chan struct{}, cfg.ParallelEvictionsAvailable),
 		orderedList:       list.New(),
+		stringBuildersPool: &sync.Pool{
+			New: func() interface{} {
+				return &strings.Builder{}
+			},
+		},
 	}
 }
 
 func (c *LRUAlgo) Get(req *model.Request) (resp *model.Response, found bool) {
-	resp, found = c.shardedMap.Get(req.UniqueKey())
+	b := c.stringBuildersPool.Get().(*strings.Builder)
+	defer c.stringBuildersPool.Put(b)
+
+	resp, found = c.shardedMap.Get(req.UniqueKey(b))
 	if !found {
 		return nil, false
 	}
@@ -54,7 +66,10 @@ func (c *LRUAlgo) Get(req *model.Request) (resp *model.Response, found bool) {
 }
 
 func (c *LRUAlgo) Set(ctx context.Context, resp *model.Response) {
-	key := resp.GetRequest().UniqueKey()
+	b := c.stringBuildersPool.Get().(*strings.Builder)
+	defer c.stringBuildersPool.Put(b)
+
+	key := resp.GetRequest().UniqueKey(b)
 	r, found := c.shardedMap.Get(key)
 	if found {
 		c.recordHit(r)
@@ -71,7 +86,9 @@ func (c *LRUAlgo) Set(ctx context.Context, resp *model.Response) {
 }
 
 func (c *LRUAlgo) Del(req *model.Request) {
-	c.shardedMap.Del(req.UniqueKey())
+	b := c.stringBuildersPool.Get().(*strings.Builder)
+	defer c.stringBuildersPool.Put(b)
+	c.shardedMap.Del(req.UniqueKey(b))
 }
 
 func (c *LRUAlgo) isEvictionNecessaryAndAvailable() bool {
@@ -90,10 +107,13 @@ func (c *LRUAlgo) evict(ctx context.Context) {
 		}
 	}
 
-	log.Info().Msgf("LRU: evicted %d items (mem: %dKB, len: %d)\n", evicted, c.shardedMap.Mem()/1024, c.shardedMap.Len())
+	//log.Info().Msgf("LRU: evicted %d items (mem: %dKB, len: %d)\n", evicted, c.shardedMap.Mem()/1024, c.shardedMap.Len())
 }
 
 func (c *LRUAlgo) evictBatch(ctx context.Context, num int) int {
+	b := c.stringBuildersPool.Get().(*strings.Builder)
+	defer c.stringBuildersPool.Put(b)
+
 	var evictionsNum int
 loop:
 	for {
@@ -102,7 +122,7 @@ loop:
 			return evictionsNum
 		default:
 			if back := c.orderedList.Back(); evictionsNum < num && back != nil {
-				c.shardedMap.Del(back.Value.(*model.Request).UniqueKey())
+				c.shardedMap.Del(back.Value.(*model.Request).UniqueKey(b))
 				c.removeBack(back)
 				evictionsNum++
 				continue loop

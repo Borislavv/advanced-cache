@@ -47,7 +47,7 @@ func (r *Request) GetChoice() string {
 	defer r.mu.RUnlock()
 	return r.choice
 }
-func (r *Request) String() string {
+func (r *Request) String(b *strings.Builder) string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -61,7 +61,6 @@ func (r *Request) String() string {
 	l += len(r.language)
 	l += len(r.choice)
 
-	var b strings.Builder
 	b.Grow(l)
 
 	b.WriteString(r.project)
@@ -73,11 +72,12 @@ func (r *Request) String() string {
 	b.WriteString(r.choice)
 	r.uniqueString = b.String()
 
+	b.Reset()
 	return r.uniqueString
 }
-func (r *Request) UniqueKey() uint64 {
+func (r *Request) UniqueKey(b *strings.Builder) uint64 {
 	if r.uniqueKey == 0 {
-		r.uniqueKey = xxh3.HashString(r.String())
+		r.uniqueKey = xxh3.HashString(r.String(b))
 	}
 	return r.uniqueKey
 }

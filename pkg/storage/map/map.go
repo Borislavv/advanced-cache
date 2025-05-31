@@ -114,28 +114,22 @@ func (m *Map[K, V]) Len() int64 {
 	return m.len.Load()
 }
 
-func (m *Map[K, V]) key(key any) []byte {
+func (m *Map[K, V]) key(key any, bufPool *sync.Pool) []byte {
 	switch x := key.(type) {
 	case string:
 		return []byte(x)
 	case int:
-		buf := make([]byte, 8)
-		binary.LittleEndian.PutUint64(buf, uint64(x))
-		return buf
 	case int64:
-		buf := make([]byte, 8)
-		binary.LittleEndian.PutUint64(buf, uint64(x))
-		return buf
 	case int32:
-		buf := make([]byte, 8)
-		binary.LittleEndian.PutUint64(buf, uint64(x))
-		return buf
 	case uint:
-		buf := make([]byte, 8)
+	case uintptr:
+		buf := bufPool.Get().([]byte)
+		defer bufPool.Put(buf)
 		binary.LittleEndian.PutUint64(buf, uint64(x))
 		return buf
 	case uint64:
-		buf := make([]byte, 8)
+		buf := bufPool.Get().([]byte)
+		defer bufPool.Put(buf)
 		binary.LittleEndian.PutUint64(buf, x)
 		return buf
 	case float64:
@@ -144,10 +138,6 @@ func (m *Map[K, V]) key(key any) []byte {
 		panic("float is not available")
 	case bool:
 		panic("bool is not available")
-	case uintptr:
-		buf := make([]byte, 8)
-		binary.LittleEndian.PutUint64(buf, uint64(x))
-		return buf
 	default:
 		panic("unsupported key type")
 	}

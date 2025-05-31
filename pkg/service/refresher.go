@@ -113,7 +113,7 @@ func (r *ResponseRefresher) setData(ctx context.Context, resp *model.Response) {
 
 	r.cluster.Set(ctx, resp)
 
-	log.Info().Msg("data successfully updated: " + resp.GetRequest().String())
+	log.Debug().Msg("data successfully updated")
 }
 
 func (r *ResponseRefresher) setMetadata(ctx context.Context, resp *model.Response) {
@@ -121,5 +121,5 @@ func (r *ResponseRefresher) setMetadata(ctx context.Context, resp *model.Respons
 
 	r.cluster.Set(ctx, resp)
 
-	log.Info().Msg("metadata successfully updated: " + resp.GetRequest().String())
+	log.Debug().Msg("metadata successfully updated")
 }
