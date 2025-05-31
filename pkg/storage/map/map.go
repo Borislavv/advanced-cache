@@ -2,6 +2,7 @@ package sharded
 
 import (
 	"encoding/binary"
+	"hash"
 	"hash/fnv"
 	"sync"
 	"sync/atomic"
@@ -15,9 +16,10 @@ type Sizer interface {
 
 type (
 	Map[K comparable, V Sizer] struct {
-		mem    *atomic.Uintptr
-		len    *atomic.Int64
-		shards [shardCount]*shard[K, V]
+		len        *atomic.Int64
+		mem        *atomic.Uintptr
+		shards     [shardCount]*shard[K, V]
+		hasherPool *sync.Pool // pool of hash/fnv (hash.Hash64)
 	}
 
 	shard[K comparable, V Sizer] struct {
@@ -27,7 +29,14 @@ type (
 )
 
 func NewMap[K comparable, V Sizer](defaultLen int) *Map[K, V] {
-	m := &Map[K, V]{mem: &atomic.Uintptr{}, len: &atomic.Int64{}}
+	m := &Map[K, V]{
+		len: &atomic.Int64{},
+		mem: &atomic.Uintptr{},
+		hasherPool: &sync.Pool{
+			New: func() any { return fnv.New64a() },
+		},
+	}
+
 	for i := 0; i < shardCount; i++ {
 		m.shards[i] = &shard[K, V]{items: make(map[K]V, defaultLen)}
 	}
@@ -35,9 +44,13 @@ func NewMap[K comparable, V Sizer](defaultLen int) *Map[K, V] {
 }
 
 func (m *Map[K, V]) getShard(key K) *shard[K, V] {
-	hash := fnv.New32a()
-	_, _ = hash.Write(m.key(key))
-	return m.shards[uint(hash.Sum32())%shardCount]
+	h := m.hasherPool.Get().(hash.Hash64)
+	defer func() {
+		h.Reset()
+		m.hasherPool.Put(h)
+	}()
+	_, _ = h.Write(m.key(key))
+	return m.shards[uint(h.Sum64())%shardCount]
 }
 
 func (m *Map[K, V]) Set(key K, value V) {
