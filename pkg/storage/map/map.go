@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 )
 
-const ShardCount = 48
+const ShardCount = 1024
 
 type Sizer interface {
 	Size() uintptr
