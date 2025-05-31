@@ -22,7 +22,7 @@ func init() {
 }
 
 func BenchmarkReadFromCluster(b *testing.B) {
-	store := storage.New(config.Storage{
+	s := storage.New(config.Storage{
 		EvictionAlgo:               string(algo.LRU),
 		MemoryFillThreshold:        0.9,
 		MemoryLimit:                1024 * 1024 * 10,
@@ -39,7 +39,7 @@ func BenchmarkReadFromCluster(b *testing.B) {
 		if err != nil {
 			panic(err)
 		}
-		store.Set(ctx, resp)
+		s.Set(ctx, resp)
 		requests = append(requests, req)
 	}
 
@@ -47,14 +47,14 @@ func BenchmarkReadFromCluster(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			store.Get(requests[i%b.N])
+			s.Get(requests[i%b.N])
 			i++
 		}
 	})
 }
 
 func BenchmarkWriteIntoCluster(b *testing.B) {
-	store := storage.New(config.Storage{
+	s := storage.New(config.Storage{
 		EvictionAlgo:               string(algo.LRU),
 		MemoryFillThreshold:        0.9,
 		MemoryLimit:                1024 * 1024 * 10,
@@ -78,7 +78,7 @@ func BenchmarkWriteIntoCluster(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			store.Set(ctx, responses[i%b.N])
+			s.Set(ctx, responses[i%b.N])
 			i++
 		}
 	})
