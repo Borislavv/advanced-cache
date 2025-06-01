@@ -1,11 +1,10 @@
-package main
+package storage
 
 import (
 	"container/list"
 	"context"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/algo"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -21,14 +20,14 @@ func init() {
 	log.Logger = log.Output(os.Stdout)
 }
 
-var BenchmarkReadFromClusterNum int
+var BenchmarkReadFromStorageNum int
 
-func BenchmarkReadFromCluster(b *testing.B) {
-	log.Info().Msg("Started i: " + strconv.Itoa(BenchmarkReadFromClusterNum) +
-		" BenchmarkReadFromCluster benchmark with " + strconv.Itoa(b.N) + " iterations.")
-	BenchmarkReadFromClusterNum++
+func BenchmarkReadFromStorage(b *testing.B) {
+	log.Info().Msg("Started i: " + strconv.Itoa(BenchmarkReadFromStorageNum) +
+		" BenchmarkReadFromStorage benchmark with " + strconv.Itoa(b.N) + " iterations.")
+	BenchmarkReadFromStorageNum++
 
-	s := storage.New(config.Storage{
+	s := New(config.Storage{
 		EvictionAlgo:               string(algo.LRU),
 		MemoryFillThreshold:        0.95,
 		MemoryLimit:                1024 * 1024 * 128,
@@ -63,24 +62,24 @@ func BenchmarkReadFromCluster(b *testing.B) {
 			i++
 		}
 		if i != 0 {
-			log.Info().Msgf("["+strconv.Itoa(BenchmarkReadFromClusterNum)+
-				"] BenchmarkReadFromCluster b.N: %d, avg duration: %s ns/op", i, strconv.Itoa((int(t.Nanoseconds())/i)/10))
+			log.Info().Msgf("["+strconv.Itoa(BenchmarkReadFromStorageNum)+
+				"] BenchmarkReadFromStorage b.N: %d, avg duration: %s ns/op", i, strconv.Itoa((int(t.Nanoseconds())/i)/10))
 		}
 		tt += t
 		ii += i
 	})
-	log.Info().Msgf("["+strconv.Itoa(BenchmarkReadFromClusterNum)+
-		"] TOTAL --->>> BenchmarkReadFromCluster total b.N: %d, total avg duration: %s ns/op", ii, strconv.Itoa((int(tt.Nanoseconds())/ii)/10))
+	log.Info().Msgf("["+strconv.Itoa(BenchmarkReadFromStorageNum)+
+		"] TOTAL --->>> BenchmarkReadFromStorage total b.N: %d, total avg duration: %s ns/op", ii, strconv.Itoa((int(tt.Nanoseconds())/ii)/10))
 }
 
-var BenchmarkWriteIntoClusterNum int
+var BenchmarkWriteIntoStorageNum int
 
-func BenchmarkWriteIntoCluster(b *testing.B) {
-	log.Info().Msg("Started i: " + strconv.Itoa(BenchmarkWriteIntoClusterNum) +
-		" BenchmarkWriteIntoCluster benchmark with " + strconv.Itoa(b.N) + " iterations.")
-	BenchmarkWriteIntoClusterNum++
+func BenchmarkWriteIntoStorage(b *testing.B) {
+	log.Info().Msg("Started i: " + strconv.Itoa(BenchmarkWriteIntoStorageNum) +
+		" BenchmarkWriteIntoStorage benchmark with " + strconv.Itoa(b.N) + " iterations.")
+	BenchmarkWriteIntoStorageNum++
 
-	s := storage.New(config.Storage{
+	s := New(config.Storage{
 		EvictionAlgo:               string(algo.LRU),
 		MemoryFillThreshold:        0.95,
 		MemoryLimit:                1024 * 1024 * 128,
@@ -113,12 +112,12 @@ func BenchmarkWriteIntoCluster(b *testing.B) {
 			i++
 		}
 		if i != 0 {
-			log.Info().Msgf("["+strconv.Itoa(BenchmarkWriteIntoClusterNum)+
-				"] BenchmarkWriteIntoCluster b.N: %d, avg duration: %s ns/op", i, strconv.Itoa((int(t.Nanoseconds())/i)/10))
+			log.Info().Msgf("["+strconv.Itoa(BenchmarkWriteIntoStorageNum)+
+				"] BenchmarkWriteIntoStorage b.N: %d, avg duration: %s ns/op", i, strconv.Itoa((int(t.Nanoseconds())/i)/10))
 		}
 		tt += t
 		ii += i
 	})
-	log.Info().Msgf("["+strconv.Itoa(BenchmarkWriteIntoClusterNum)+
-		"] TOTAL --->>> BenchmarkWriteIntoCluster total b.N: %d, total avg duration: %s ns/op", ii, strconv.Itoa((int(tt.Nanoseconds())/ii)/10))
+	log.Info().Msgf("["+strconv.Itoa(BenchmarkWriteIntoStorageNum)+
+		"] TOTAL --->>> BenchmarkWriteIntoStorage total b.N: %d, total avg duration: %s ns/op", ii, strconv.Itoa((int(tt.Nanoseconds())/ii)/10))
 }
