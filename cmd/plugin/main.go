@@ -26,7 +26,7 @@ func init() {
 
 	store = storage.New(config.Storage{
 		EvictionAlgo:        string(algo.LRU),
-		MemoryFillThreshold: 0.85,
+		MemoryFillThreshold: 0.95,
 		MemoryLimit:         1024 * 1024 * 10,
 	})
 
