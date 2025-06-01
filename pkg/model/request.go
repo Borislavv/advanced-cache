@@ -49,7 +49,9 @@ func (r *Request) GetChoice() string {
 func (r *Request) String() string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	r.uniqueString = r.project + "," + r.domain + "," + r.language + "," + r.choice
+	if r.uniqueString == "" {
+		r.uniqueString = r.project + "," + r.domain + "," + r.language + "," + r.choice
+	}
 	return r.uniqueString
 }
 func (r *Request) UniqueKey() uint64 {
