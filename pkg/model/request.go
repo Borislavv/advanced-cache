@@ -47,16 +47,21 @@ func (r *Request) GetChoice() string {
 	return r.choice
 }
 func (r *Request) String() string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.strUnlocked()
+}
+func (r *Request) UniqueKey() uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.uniqueKey == 0 {
+		r.uniqueKey = xxh3.HashString(r.strUnlocked())
+	}
+	return r.uniqueKey
+}
+func (r *Request) strUnlocked() string {
 	if r.uniqueString == "" {
 		r.uniqueString = r.project + "," + r.domain + "," + r.language + "," + r.choice
 	}
 	return r.uniqueString
-}
-func (r *Request) UniqueKey() uint64 {
-	if r.uniqueKey == 0 {
-		r.uniqueKey = xxh3.HashString(r.String())
-	}
-	return r.uniqueKey
 }

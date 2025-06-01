@@ -5,6 +5,7 @@ import (
 	"context"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/repository"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/algo"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -27,19 +28,26 @@ func BenchmarkReadFromStorage(b *testing.B) {
 	BenchmarkReadFromStorageNum++
 
 	s := New(config.Storage{
-		EvictionAlgo:               string(algo.LRU),
-		MemoryFillThreshold:        0.95,
-		MemoryLimit:                1024 * 1024 * 128,
-		ParallelEvictionsAvailable: 3,
+		EvictionAlgo:        string(algo.LRU),
+		MemoryFillThreshold: 0.95,
+		MemoryLimit:         1024 * 1024 * 128,
+		EvictionParallelism: 3,
 	}, 100)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	seoRepo := repository.NewSeo()
+
+	cfg := config.Response{
+		RevalidateBeta:     0.5,
+		RevalidateInterval: time.Minute * 10,
+	}
+
 	requests := make([]*model.Request, 0, b.N)
 	for i := 0; i < b.N; i++ {
 		req := model.NewRequest("285", "1xbet.com", "en", `{"name": "betting", "choice": null}`+strconv.Itoa(i))
-		resp, err := model.NewResponse(&list.Element{}, req, []byte(`{"data": "success"}`), time.Minute*10)
+		resp, err := model.NewResponse(cfg, &list.Element{}, req, []byte(`{"data": "success"}`), seoRepo)
 		if err != nil {
 			panic(err)
 		}
@@ -47,10 +55,9 @@ func BenchmarkReadFromStorage(b *testing.B) {
 		requests = append(requests, req)
 	}
 
-	b.ResetTimer()
-
 	ii := 0
 	tt := time.Duration(0)
+	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		t := time.Duration(0)
@@ -78,28 +85,35 @@ func BenchmarkWriteIntoStorage(b *testing.B) {
 	BenchmarkWriteIntoStorageNum++
 
 	s := New(config.Storage{
-		EvictionAlgo:               string(algo.LRU),
-		MemoryFillThreshold:        0.95,
-		MemoryLimit:                1024 * 1024 * 128,
-		ParallelEvictionsAvailable: 3,
+		EvictionAlgo:        string(algo.LRU),
+		MemoryFillThreshold: 0.95,
+		MemoryLimit:         1024 * 1024 * 128,
+		EvictionParallelism: 3,
 	}, 100)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	seoRepo := repository.NewSeo()
+
+	cfg := config.Response{
+		RevalidateBeta:     0.5,
+		RevalidateInterval: time.Minute * 10,
+	}
+
 	responses := make([]*model.Response, b.N)
 	for i := 0; i < b.N; i++ {
 		req := model.NewRequest("285", "1xbet.com", "en", `{"name": "betting", "choice": null}`+strconv.Itoa(i))
-		resp, err := model.NewResponse(&list.Element{}, req, []byte(`{"data": "success"}`), time.Minute*10)
+		resp, err := model.NewResponse(cfg, &list.Element{}, req, []byte(`{"data": "success"}`), seoRepo)
 		if err != nil {
 			panic(err)
 		}
 		responses[i] = resp
 	}
 
-	b.ResetTimer()
 	ii := 0
 	tt := time.Duration(0)
+	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		t := time.Duration(0)

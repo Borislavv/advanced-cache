@@ -3,7 +3,12 @@ package model
 import (
 	"container/list"
 	"fmt"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/repository"
 	"github.com/buger/jsonparser"
+	"github.com/rs/zerolog/log"
+	"math"
+	"math/rand"
 	"sync"
 	"time"
 	"unsafe"
@@ -13,6 +18,7 @@ const nameToken = "name"
 
 type Response struct {
 	Meta
+	cfg         config.Response
 	mu          *sync.RWMutex
 	listElement *list.Element
 	lastAccess  time.Time
@@ -20,32 +26,81 @@ type Response struct {
 }
 
 type Meta struct {
-	request            *Request
-	frequency          int // number of times of response was accessed
-	data               []byte
-	tags               []string
-	revalidatedAt      time.Time
-	revalidateInterval time.Duration
+	seoRepo       repository.Seo
+	request       *Request  // request for current response
+	frequency     int       // number of times of response was accessed
+	data          []byte    // raw data of response
+	tags          []string  // choice names as tags
+	revalidatedAt time.Time // last revalidated timestamp
 }
 
-func NewResponse(item *list.Element, req *Request, data []byte, revalidateInterval time.Duration) (*Response, error) {
+func NewResponse(
+	cfg config.Response,
+	item *list.Element,
+	req *Request,
+	data []byte,
+	seoRepo repository.Seo,
+) (*Response, error) {
 	tags, err := ExtractTags(req.GetChoice())
 	if err != nil {
 		return nil, fmt.Errorf("cannot extract tags from choice: %s", err.Error())
 	}
 	return &Response{
 		mu:          &sync.RWMutex{},
+		cfg:         cfg,
 		listElement: item,
 		createdAt:   time.Now(),
 		lastAccess:  time.Now(),
 		Meta: Meta{
-			request:            req,
-			data:               data,
-			tags:               tags,
-			revalidatedAt:      time.Now(),
-			revalidateInterval: revalidateInterval,
+			seoRepo:       seoRepo,
+			request:       req,
+			data:          data,
+			tags:          tags,
+			revalidatedAt: time.Now(),
 		},
 	}, nil
+}
+func (r *Response) Revalidate() {
+	data, err := r.seoRepo.PageData()
+	if err != nil {
+		log.Err(err).Msg("pagedata fetch error for request: " + r.GetRequest().String())
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.lastAccess = time.Now()
+	r.frequency = r.frequency + 1
+	r.revalidatedAt = time.Now()
+	r.data = data
+	return
+}
+func (r *Response) ShouldBeRevalidated() bool {
+	r.mu.RLock()
+	revalidatedAt := r.revalidatedAt
+	revalidatedInterval := r.cfg.RevalidateInterval
+	beta := r.cfg.RevalidateBeta
+	r.mu.RUnlock()
+
+	return r.shouldRevalidateBeta(revalidatedAt, revalidatedInterval, beta)
+}
+func (r *Response) shouldRevalidateBeta(revalidatedAt time.Time, revalidateInterval time.Duration, beta float64) bool {
+	now := time.Now()
+	age := now.Sub(revalidatedAt)
+
+	if age >= revalidateInterval {
+		// properly expired, must be revalidated
+		return true
+	}
+
+	// chance of prevent refresh
+	probability := math.Exp(-beta * float64(age) / float64(revalidateInterval))
+	rnd := rand.Float64() // [0.0, 1.0]
+
+	return rnd >= probability
+}
+func random(min, max int) int {
+	return rand.Intn(max-min) + min
 }
 func (r *Response) GetRequest() *Request {
 	r.mu.RLock()
@@ -108,6 +163,7 @@ func (r *Response) GetCreatedAt() time.Time {
 	defer r.mu.RUnlock()
 	return r.createdAt
 }
+
 func (r *Response) GetRevalidatedAt() time.Time {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -121,7 +177,7 @@ func (r *Response) SetRevalidatedAt() {
 func (r *Response) GetRevalidateInterval() time.Duration {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.revalidateInterval
+	return r.cfg.RevalidateInterval
 }
 func (r *Response) Touch() {
 	r.mu.Lock()
