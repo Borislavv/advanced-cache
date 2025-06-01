@@ -6,6 +6,7 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
+	"github.com/rs/zerolog/log"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -118,7 +119,7 @@ func (c *LRUAlgo) evict(ctx context.Context, key uint) {
 	evicted := c.evictBatch(ctx, key, itemsForEviction)
 	_ = evicted
 
-	//log.Info().Msgf("LRU: evicted %d items (mem: %dKB, len: %d)\n", evicted, c.shardedMap.Mem()/1024, c.shardedMap.Len())
+	log.Debug().Msgf("LRU: evicted %d items (mem: %dKB, len: %d)\n", evicted, c.shardedMap.Mem()/1024, c.shardedMap.Len())
 }
 
 func (c *LRUAlgo) evictBatch(ctx context.Context, shardKey uint, num int) int {
