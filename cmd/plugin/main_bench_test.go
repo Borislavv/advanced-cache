@@ -50,13 +50,27 @@ func BenchmarkReadFromCluster(b *testing.B) {
 	}
 
 	b.ResetTimer()
+
+	ii := 0
+	tt := time.Duration(0)
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
+		t := time.Duration(0)
 		for pb.Next() {
+			tc := time.Now()
 			s.Get(requests[i%b.N])
+			t += time.Since(tc)
 			i++
 		}
+		if i != 0 {
+			log.Info().Msgf("["+strconv.Itoa(BenchmarkReadFromClusterNum)+
+				"] BenchmarkReadFromCluster b.N: %d, avg duration: %s ns/op", i, strconv.Itoa((int(t.Nanoseconds())/i)/10))
+		}
+		tt += t
+		ii += i
 	})
+	log.Info().Msgf("["+strconv.Itoa(BenchmarkReadFromClusterNum)+
+		"] TOTAL --->>> BenchmarkReadFromCluster total b.N: %d, total avg duration: %s ns/op", ii, strconv.Itoa((int(tt.Nanoseconds())/ii)/10))
 }
 
 var BenchmarkWriteIntoClusterNum int
@@ -87,11 +101,24 @@ func BenchmarkWriteIntoCluster(b *testing.B) {
 	}
 
 	b.ResetTimer()
+	ii := 0
+	tt := time.Duration(0)
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
+		t := time.Duration(0)
 		for pb.Next() {
+			tc := time.Now()
 			s.Set(ctx, responses[i%b.N])
+			t += time.Since(tc)
 			i++
 		}
+		if i != 0 {
+			log.Info().Msgf("["+strconv.Itoa(BenchmarkWriteIntoClusterNum)+
+				"] BenchmarkWriteIntoCluster b.N: %d, avg duration: %s ns/op", i, strconv.Itoa((int(t.Nanoseconds())/i)/10))
+		}
+		tt += t
+		ii += i
 	})
+	log.Info().Msgf("["+strconv.Itoa(BenchmarkWriteIntoClusterNum)+
+		"] TOTAL --->>> BenchmarkWriteIntoCluster total b.N: %d, total avg duration: %s ns/op", ii, strconv.Itoa((int(tt.Nanoseconds())/ii)/10))
 }
