@@ -65,7 +65,7 @@ func BenchmarkWriteIntoCluster(b *testing.B) {
 	log.Info().Msg("Started i: " + strconv.Itoa(BenchmarkWriteIntoClusterNum) +
 		" BenchmarkWriteIntoCluster benchmark with " + strconv.Itoa(b.N) + " iterations.")
 	BenchmarkWriteIntoClusterNum++
-	
+
 	s := storage.New(config.Storage{
 		EvictionAlgo:               string(algo.LRU),
 		MemoryFillThreshold:        0.95,
