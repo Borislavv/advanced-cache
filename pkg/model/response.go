@@ -19,21 +19,22 @@ const nameToken = "name"
 
 type Response struct {
 	*Datum
-	mu          *sync.RWMutex
-	cfg         config.Response
-	seoRepo     repository.Seo
-	request     *Request // request for current response
-	tags        []string // choice names as tags
-	listElement *list.Element
-	frequency   int // number of times of response was accessed
-	createdAt   time.Time
+	mu            *sync.RWMutex
+	cfg           config.Response
+	seoRepo       repository.Seo
+	request       *Request // request for current response
+	tags          []string // choice names as tags
+	listElement   *list.Element
+	frequency     int // number of times of response was accessed
+	lastAccess    time.Time
+	revalidatedAt time.Time // last revalidated timestamp
+	revalidator   func() ([]byte, error)
+	createdAt     time.Time
 }
 
 type Datum struct {
-	headers       http.Header
-	body          []byte // raw body of response
-	lastAccess    time.Time
-	revalidatedAt time.Time // last revalidated timestamp
+	headers http.Header
+	body    []byte // raw body of response
 }
 
 func NewResponse(
@@ -41,46 +42,53 @@ func NewResponse(
 	headers http.Header,
 	req *Request,
 	body []byte,
-	seoRepo repository.Seo,
+	revalidator func() ([]byte, error),
 ) (*Response, error) {
 	tags, err := ExtractTags(req.GetChoice())
 	if err != nil {
 		return nil, fmt.Errorf("cannot extract tags from choice: %s", err.Error())
 	}
 	return &Response{
-		mu:        &sync.RWMutex{},
-		cfg:       cfg,
-		request:   req,
-		seoRepo:   seoRepo,
-		tags:      tags,
-		createdAt: time.Now(),
+		mu:          &sync.RWMutex{},
+		cfg:         cfg,
+		request:     req,
+		tags:        tags,
+		revalidator: revalidator,
 		Datum: &Datum{
-			headers:       headers,
-			body:          body,
-			lastAccess:    time.Now(),
-			revalidatedAt: time.Now(),
+			headers: headers,
+			body:    body,
 		},
+		revalidatedAt: time.Now(),
+		lastAccess:    time.Now(),
+		createdAt:     time.Now(),
 	}, nil
 }
 func (r *Response) Revalidate() {
-	data, err := r.seoRepo.PageData()
+	defer log.Info().Msg("success revalidated")
+
+	r.mu.RLock()
+	revalidator := r.revalidator
+	r.mu.RUnlock()
+
+	data, err := revalidator()
 	if err != nil {
-		log.Err(err).Msg("pagedata fetch error for request: " + r.GetRequest().String())
+		log.Warn().Err(err).Msg("revalidator failed")
 		return
 	}
 
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.lastAccess = time.Now()
-	r.frequency = r.frequency + 1
 	r.revalidatedAt = time.Now()
 	r.body = data
+	r.mu.Unlock()
 	return
 }
 func (r *Response) ShouldBeRevalidated() bool {
 	r.mu.RLock()
 	revalidatedAt := r.revalidatedAt
 	revalidatedInterval := r.cfg.RevalidateInterval
+	// beta = 0.5 — обычно хорошее стартовое значение
+	// beta = 1.0 — агрессивное обновление
+	// beta = 0.0 — отключает бета-обновление полностью
 	beta := r.cfg.RevalidateBeta
 	r.mu.RUnlock()
 
