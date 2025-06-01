@@ -43,7 +43,9 @@ func init() {
 	reqs = make([]*model.Request, 0, 10000)
 	for i := 0; i < 10000; i++ {
 		req := model.NewRequest("285", "1xbet.com", "en", `{"name": "betting", "choice": null}`+strconv.Itoa(i))
-		resp, err := model.NewResponse(cfg, http.Header{}, req, []byte(`{"data": "success"}`), seoRepo)
+		resp, err := model.NewResponse(cfg, http.Header{}, req, []byte(`{"data": "success"}`), func() ([]byte, error) {
+			return seoRepo.PageData()
+		})
 		if err != nil {
 			panic(err)
 		}

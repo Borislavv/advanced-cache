@@ -41,13 +41,15 @@ func BenchmarkReadFromStorage(b *testing.B) {
 
 	cfg := config.Response{
 		RevalidateBeta:     0.5,
-		RevalidateInterval: time.Minute * 10,
+		RevalidateInterval: time.Minute * 1,
 	}
 
 	requests := make([]*model.Request, 0, b.N)
 	for i := 0; i < b.N; i++ {
 		req := model.NewRequest("285", "1xbet.com", "en", `{"name": "betting", "choice": null}`+strconv.Itoa(i))
-		resp, err := model.NewResponse(cfg, http.Header{}, req, []byte(`{"data": "success"}`), seoRepo)
+		resp, err := model.NewResponse(cfg, http.Header{}, req, []byte(`{"data": "success"}`), func() ([]byte, error) {
+			return seoRepo.PageData()
+		})
 		if err != nil {
 			panic(err)
 		}
@@ -104,7 +106,9 @@ func BenchmarkWriteIntoStorage(b *testing.B) {
 	responses := make([]*model.Response, b.N)
 	for i := 0; i < b.N; i++ {
 		req := model.NewRequest("285", "1xbet.com", "en", `{"name": "betting", "choice": null}`+strconv.Itoa(i))
-		resp, err := model.NewResponse(cfg, http.Header{}, req, []byte(`{"data": "success"}`), seoRepo)
+		resp, err := model.NewResponse(cfg, http.Header{}, req, []byte(`{"data": "success"}`), func() ([]byte, error) {
+			return seoRepo.PageData()
+		})
 		if err != nil {
 			panic(err)
 		}
