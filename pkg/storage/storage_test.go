@@ -16,22 +16,21 @@ import (
 
 func init() {
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
-	zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	log.Logger = log.Output(os.Stdout)
 }
 
 var BenchmarkReadFromStorageNum int
 
 func BenchmarkReadFromStorage(b *testing.B) {
-	log.Info().Msg("Started i: " + strconv.Itoa(BenchmarkReadFromStorageNum) +
-		" BenchmarkReadFromStorage benchmark with " + strconv.Itoa(b.N) + " iterations.")
+	log.Info().Msg("[" + strconv.Itoa(BenchmarkReadFromStorageNum) + "] Started BenchmarkReadFromStorage benchmark with " + strconv.Itoa(b.N) + " iterations.")
 	BenchmarkReadFromStorageNum++
 
 	s := New(config.Storage{
 		EvictionAlgo:               string(algo.LRU),
 		MemoryFillThreshold:        0.95,
 		MemoryLimit:                1024 * 1024 * 128,
-		ParallelEvictionsAvailable: 2,
+		ParallelEvictionsAvailable: 3,
 	}, 100)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -75,15 +74,14 @@ func BenchmarkReadFromStorage(b *testing.B) {
 var BenchmarkWriteIntoStorageNum int
 
 func BenchmarkWriteIntoStorage(b *testing.B) {
-	log.Info().Msg("Started i: " + strconv.Itoa(BenchmarkWriteIntoStorageNum) +
-		" BenchmarkWriteIntoStorage benchmark with " + strconv.Itoa(b.N) + " iterations.")
+	log.Info().Msg("[" + strconv.Itoa(BenchmarkReadFromStorageNum) + "] Started BenchmarkWriteIntoStorage benchmark with " + strconv.Itoa(b.N) + " iterations.")
 	BenchmarkWriteIntoStorageNum++
 
 	s := New(config.Storage{
 		EvictionAlgo:               string(algo.LRU),
 		MemoryFillThreshold:        0.95,
 		MemoryLimit:                1024 * 1024 * 128,
-		ParallelEvictionsAvailable: 2,
+		ParallelEvictionsAvailable: 3,
 	}, 100)
 
 	ctx, cancel := context.WithCancel(context.Background())
