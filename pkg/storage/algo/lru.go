@@ -113,7 +113,7 @@ func (c *LRUAlgo) evict(ctx context.Context, key uint) {
 
 	memItem := int64(c.shardedMap.Mem()) / c.shardedMap.Len()
 
-	itemsForEviction := int(memDiff / memItem)
+	itemsForEviction := int(memDiff/memItem) + c.cfg.ParallelEvictionsAvailable
 
 	evicted := c.evictBatch(ctx, key, itemsForEviction)
 	_ = evicted
