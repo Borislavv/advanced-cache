@@ -90,7 +90,9 @@ func (p *Plugin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(p.ctx, time.Millisecond*400)
 	defer cancel()
 
-	resp, err := model.NewResponse(p.config.Response, clonedWriter.Header().Clone(), req, clonedWriter.body.Bytes(), p.seoRepo)
+	resp, err := model.NewResponse(p.config.Response, clonedWriter.Header().Clone(), req, clonedWriter.body.Bytes(), func() ([]byte, error) {
+		return p.seoRepo.PageData()
+	})
 	if err != nil {
 		log.Err(err).Msg("failed to make response")
 		w.WriteHeader(http.StatusInternalServerError)
