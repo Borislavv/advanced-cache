@@ -106,14 +106,17 @@ func (c *LRUAlgo) evict(ctx context.Context, key uint) {
 	c.activeEvictors.Add(1)
 	defer c.activeEvictors.Add(-1)
 
-	evicted := 0
-	for i := 0; i < maxEvictionIterations; i++ {
-		evicted += c.evictBatch(ctx, key, maxEvictionsPreIter)
-		if c.shardedMap.Mem() < c.evictionThreshold {
-			break
-		}
+	memDiff := int64(c.shardedMap.Mem() - c.evictionThreshold)
+	if memDiff <= 0 {
+		return
 	}
-	// todo improved eviction by calculating a num of elements for remove
+
+	memItem := int64(c.shardedMap.Mem()) / c.shardedMap.Len()
+
+	itemsForEviction := int(memDiff / memItem)
+
+	evicted := c.evictBatch(ctx, key, itemsForEviction)
+	_ = evicted
 
 	//log.Info().Msgf("LRU: evicted %d items (mem: %dKB, len: %d)\n", evicted, c.shardedMap.Mem()/1024, c.shardedMap.Len())
 }
