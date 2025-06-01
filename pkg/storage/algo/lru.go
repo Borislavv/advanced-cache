@@ -119,7 +119,7 @@ func (c *LRUAlgo) evict(ctx context.Context, key uint) {
 	evicted := c.evictBatch(ctx, key, itemsForEviction)
 	_ = evicted
 
-	log.Debug().Msgf("LRU: evicted %d items (mem: %dKB, len: %d)\n", evicted, c.shardedMap.Mem()/1024, c.shardedMap.Len())
+	log.Debug().Msgf("LRU: evicted %d items (mem: %dKB, len: %d)", evicted, c.shardedMap.Mem()/1024, c.shardedMap.Len())
 }
 
 func (c *LRUAlgo) evictBatch(ctx context.Context, shardKey uint, num int) int {
