@@ -87,7 +87,7 @@ func (c *LRUAlgo) Set(ctx context.Context, resp *model.Response) {
 	r, found := c.shardedMap.Get(key, shardKey)
 	if found {
 		c.recordHit(shardKey, r)
-		r.SetMeta(resp.GetMeta())
+		r.SetDatum(resp.GetDatum())
 		return
 	}
 

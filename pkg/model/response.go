@@ -17,20 +17,20 @@ import (
 const nameToken = "name"
 
 type Response struct {
-	Meta
-	cfg         config.Response
+	*Datum
 	mu          *sync.RWMutex
+	cfg         config.Response
+	seoRepo     repository.Seo
+	request     *Request // request for current response
+	tags        []string // choice names as tags
 	listElement *list.Element
-	lastAccess  time.Time
+	frequency   int // number of times of response was accessed
 	createdAt   time.Time
 }
 
-type Meta struct {
-	seoRepo       repository.Seo
-	request       *Request  // request for current response
-	frequency     int       // number of times of response was accessed
-	data          []byte    // raw data of response
-	tags          []string  // choice names as tags
+type Datum struct {
+	data          []byte // raw data of response
+	lastAccess    time.Time
 	revalidatedAt time.Time // last revalidated timestamp
 }
 
@@ -48,14 +48,14 @@ func NewResponse(
 	return &Response{
 		mu:          &sync.RWMutex{},
 		cfg:         cfg,
+		request:     req,
+		seoRepo:     seoRepo,
+		tags:        tags,
 		listElement: item,
 		createdAt:   time.Now(),
-		lastAccess:  time.Now(),
-		Meta: Meta{
-			seoRepo:       seoRepo,
-			request:       req,
+		Datum: &Datum{
 			data:          data,
-			tags:          tags,
+			lastAccess:    time.Now(),
 			revalidatedAt: time.Now(),
 		},
 	}, nil
@@ -99,9 +99,7 @@ func (r *Response) shouldRevalidateBeta(revalidatedAt time.Time, revalidateInter
 
 	return rnd >= probability
 }
-func random(min, max int) int {
-	return rand.Intn(max-min) + min
-}
+
 func (r *Response) GetRequest() *Request {
 	r.mu.RLock()
 	req := r.request
@@ -196,18 +194,17 @@ func (r *Response) SetListElement(el *list.Element) {
 	r.listElement = el
 }
 
-func (r *Response) GetMeta() Meta {
+func (r *Response) GetDatum() *Datum {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.Meta
+	return r.Datum
 }
 
-func (r *Response) SetMeta(meta Meta) {
+func (r *Response) SetDatum(meta *Datum) {
 	r.mu.Lock()
-	r.Meta = meta
+	r.Datum = meta
 	r.mu.Unlock()
 }
-
 func (r *Response) Size() uintptr {
 	return unsafe.Sizeof(*r)
 }
