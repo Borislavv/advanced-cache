@@ -21,12 +21,18 @@ func init() {
 	log.Logger = log.Output(os.Stdout)
 }
 
+var BenchmarkReadFromClusterNum int
+
 func BenchmarkReadFromCluster(b *testing.B) {
+	log.Info().Msg("Started i: " + strconv.Itoa(BenchmarkReadFromClusterNum) +
+		" BenchmarkReadFromCluster benchmark with " + strconv.Itoa(b.N) + " iterations.")
+	BenchmarkReadFromClusterNum++
+
 	s := storage.New(config.Storage{
 		EvictionAlgo:               string(algo.LRU),
-		MemoryFillThreshold:        0.85,
+		MemoryFillThreshold:        0.95,
 		MemoryLimit:                1024 * 1024 * 128,
-		ParallelEvictionsAvailable: 10,
+		ParallelEvictionsAvailable: 2,
 	}, 100)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -53,12 +59,18 @@ func BenchmarkReadFromCluster(b *testing.B) {
 	})
 }
 
+var BenchmarkWriteIntoClusterNum int
+
 func BenchmarkWriteIntoCluster(b *testing.B) {
+	log.Info().Msg("Started i: " + strconv.Itoa(BenchmarkWriteIntoClusterNum) +
+		" BenchmarkWriteIntoCluster benchmark with " + strconv.Itoa(b.N) + " iterations.")
+	BenchmarkWriteIntoClusterNum++
+	
 	s := storage.New(config.Storage{
 		EvictionAlgo:               string(algo.LRU),
-		MemoryFillThreshold:        0.85,
+		MemoryFillThreshold:        0.95,
 		MemoryLimit:                1024 * 1024 * 128,
-		ParallelEvictionsAvailable: 10,
+		ParallelEvictionsAvailable: 2,
 	}, 100)
 
 	ctx, cancel := context.WithCancel(context.Background())
