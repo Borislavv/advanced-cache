@@ -36,7 +36,6 @@ func NewMap[K comparable, V Sizer](defaultLen int) *Map[K, V] {
 			New: func() any { return fnv.New64a() },
 		},
 	}
-
 	for i := 0; i < ShardCount; i++ {
 		m.shards[i] = &shard[K, V]{items: make(map[K]V, defaultLen)}
 	}
