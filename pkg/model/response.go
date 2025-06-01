@@ -2,9 +2,8 @@ package model
 
 import (
 	"container/list"
+	"context"
 	"fmt"
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/repository"
 	"github.com/buger/jsonparser"
 	"github.com/rs/zerolog/log"
 	"math"
@@ -15,82 +14,109 @@ import (
 	"unsafe"
 )
 
-const nameToken = "name"
+const (
+	nameToken      = "name"
+	aggressiveBeta = 0.9 // aggressive revalidation (probably may be upped to 0.95 or 0.98-0.99)
+)
+
+type ResponseCreator func(ctx context.Context, req *Request) (statusCode int, body []byte, headers http.Header, err error)
 
 type Response struct {
 	*Datum
-	mu            *sync.RWMutex
-	cfg           config.Response
-	seoRepo       repository.Seo
-	request       *Request // request for current response
-	tags          []string // choice names as tags
-	listElement   *list.Element
-	frequency     int // number of times of response was accessed
-	lastAccess    time.Time
-	revalidatedAt time.Time // last revalidated timestamp
-	revalidator   func() ([]byte, error)
-	createdAt     time.Time
+	mu                 *sync.RWMutex
+	request            *Request // request for current response
+	listElement        *list.Element
+	tags               []string // choice names as tags
+	creator            ResponseCreator
+	frequency          int // number of times of response was accessed
+	lastAccess         time.Time
+	revalidateInterval time.Duration
+	revalidateBeta     float64
+	revalidatedAt      time.Time // last revalidated timestamp
+	createdAt          time.Time
 }
 
 type Datum struct {
-	headers http.Header
-	body    []byte // raw body of response
+	headers    http.Header
+	statusCode int
+	body       []byte // raw body of response
 }
 
 func NewResponse(
-	cfg config.Response,
 	headers http.Header,
+	statusCode int,
 	req *Request,
 	body []byte,
-	revalidator func() ([]byte, error),
+	creator ResponseCreator,
+	revalidateInterval time.Duration,
+	revalidateBeta float64,
 ) (*Response, error) {
 	tags, err := ExtractTags(req.GetChoice())
 	if err != nil {
 		return nil, fmt.Errorf("cannot extract tags from choice: %s", err.Error())
 	}
 	return &Response{
-		mu:          &sync.RWMutex{},
-		cfg:         cfg,
-		request:     req,
-		tags:        tags,
-		revalidator: revalidator,
+		mu:      &sync.RWMutex{},
+		request: req,
+		tags:    tags,
 		Datum: &Datum{
-			headers: headers,
-			body:    body,
+			statusCode: statusCode,
+			headers:    headers,
+			body:       body,
 		},
-		revalidatedAt: time.Now(),
-		lastAccess:    time.Now(),
-		createdAt:     time.Now(),
+		creator:            creator,
+		revalidateInterval: revalidateInterval,
+		revalidateBeta:     revalidateBeta,
+		revalidatedAt:      time.Now(),
+		lastAccess:         time.Now(),
+		createdAt:          time.Now(),
 	}, nil
 }
-func (r *Response) Revalidate() {
-	defer log.Info().Msg("success revalidated")
+func (r *Response) Revalidate(ctx context.Context) {
+	var err error
+	defer func() {
+		if err != nil {
+			log.Debug().Msg("revalidation failed")
+		} else {
+			log.Debug().Msg("success revalidated")
+		}
+	}()
 
 	r.mu.RLock()
-	revalidator := r.revalidator
+	req := r.request
+	revalidator := r.creator
 	r.mu.RUnlock()
 
-	data, err := revalidator()
+	statusCode, body, headers, err := revalidator(ctx, req)
 	if err != nil {
-		log.Warn().Err(err).Msg("revalidator failed")
+		log.Warn().Err(err).Msg("creator failed")
 		return
 	}
 
 	r.mu.Lock()
 	r.revalidatedAt = time.Now()
-	r.body = data
+	r.body = body
+	r.headers = headers
+	r.statusCode = statusCode
 	r.mu.Unlock()
 	return
 }
 func (r *Response) ShouldBeRevalidated() bool {
 	r.mu.RLock()
 	revalidatedAt := r.revalidatedAt
-	revalidatedInterval := r.cfg.RevalidateInterval
+	revalidatedInterval := r.revalidateInterval
 	// beta = 0.5 — обычно хорошее стартовое значение
 	// beta = 1.0 — агрессивное обновление
 	// beta = 0.0 — отключает бета-обновление полностью
-	beta := r.cfg.RevalidateBeta
+	beta := r.revalidateBeta
+	statusCode := r.statusCode
 	r.mu.RUnlock()
+
+	if statusCode != http.StatusOK {
+		beta = aggressiveBeta
+	} else {
+		beta = r.revalidateBeta
+	}
 
 	return r.shouldRevalidateBeta(revalidatedAt, revalidatedInterval, beta)
 }
@@ -153,6 +179,11 @@ func (r *Response) GetHeaders() http.Header {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.headers
+}
+func (r *Response) Get() (statusCode int, body []byte, headers http.Header) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.statusCode, r.body, r.headers
 }
 func (r *Response) Size() uintptr {
 	return unsafe.Sizeof(*r)

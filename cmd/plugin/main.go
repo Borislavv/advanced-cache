@@ -2,56 +2,40 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/repository"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage"
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/algo"
+	"github.com/joho/godotenv"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/viper"
 	"net/http"
 	"os"
-	"strconv"
-	"time"
 )
-import _ "net/http/pprof"
 
-var reqs []*model.Request
-var store *storage.AlgoStorage
+func InitEnv() {
+	_ = godotenv.Load()
+	viper.AutomaticEnv()
+	_ = viper.BindEnv("INIT_STORAGE_LEN_PER_SHARD")
+	_ = viper.BindEnv("EVICTION_ALGO")
+	_ = viper.BindEnv("MEMORY_FILL_THRESHOLD")
+	_ = viper.BindEnv("MEMORY_LIMIT")
+	_ = viper.BindEnv("REVALIDATE_BETA")
+	_ = viper.BindEnv("REVALIDATE_INTERVAL")
+	_ = viper.BindEnv("SEO_URL")
+}
+
+func InitLogger(level zerolog.Level) {
+	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
+	zerolog.SetGlobalLevel(level)
+	log.Logger = log.Output(os.Stdout)
+}
 
 func init() {
-	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
-	zerolog.SetGlobalLevel(zerolog.DebugLevel)
-	log.Logger = log.Output(os.Stdout)
-
-	store = storage.New(config.Storage{
-		EvictionAlgo:        string(algo.LRU),
-		MemoryFillThreshold: 0.95,
-		MemoryLimit:         1024 * 1024 * 10,
-	})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	seoRepo := repository.NewSeo()
-
-	cfg := config.Response{
-		RevalidateBeta:     0.5,
-		RevalidateInterval: time.Minute * 10,
-	}
-
-	reqs = make([]*model.Request, 0, 10000)
-	for i := 0; i < 10000; i++ {
-		req := model.NewRequest("285", "1xbet.com", "en", `{"name": "betting", "choice": null}`+strconv.Itoa(i))
-		resp, err := model.NewResponse(cfg, http.Header{}, req, []byte(`{"data": "success"}`), func() ([]byte, error) {
-			return seoRepo.PageData()
-		})
-		if err != nil {
-			panic(err)
-		}
-		store.Set(ctx, resp)
-		reqs = append(reqs, req)
-	}
+	InitEnv()
+	InitLogger(zerolog.DebugLevel)
 }
 
 func main() {
@@ -61,12 +45,36 @@ func main() {
 		}
 	}()
 
-	var i int
-	for {
-		if i >= 10000 {
-			i = 0
-		}
-		store.Get(reqs[i%10000])
-		i++
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := &config.Config{}
+	if err := viper.Unmarshal(cfg); err != nil {
+		log.Err(err).Msg("failed to unmarshal config")
+		return
 	}
+
+	db := storage.New(*cfg)
+	seoRepo := repository.NewSeo(cfg.Repository)
+	req := model.NewRequest("285", "1x001.com", "en", `{"name": "betting", "choice": null}`)
+
+	_, _, _, found, err := db.Get(ctx, req, seoRepo.PageData)
+	if err != nil {
+		log.Err(err).Msg("failed to get body")
+		return
+	}
+	if !found {
+		log.Info().Msg("it's correct, must not be found")
+	}
+
+	_, data, _, found, err := db.Get(ctx, req, seoRepo.PageData)
+	if err != nil {
+		log.Err(err).Msg("failed to get body")
+		return
+	}
+	if !found {
+		log.Error().Msg("this is bad, very bad, data is not found")
+		return
+	}
+	fmt.Println(string(data))
 }

@@ -4,10 +4,10 @@ import (
 	"context"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/repository"
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/algo"
+	"github.com/joho/godotenv"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/viper"
 	"net/http"
 	"os"
 	"strconv"
@@ -15,10 +15,27 @@ import (
 	"time"
 )
 
-func init() {
+func InitEnv() {
+	_ = godotenv.Load()
+	viper.AutomaticEnv()
+	_ = viper.BindEnv("INIT_STORAGE_LEN_PER_SHARD")
+	_ = viper.BindEnv("EVICTION_ALGO")
+	_ = viper.BindEnv("MEMORY_FILL_THRESHOLD")
+	_ = viper.BindEnv("MEMORY_LIMIT")
+	_ = viper.BindEnv("REVALIDATE_BETA")
+	_ = viper.BindEnv("REVALIDATE_INTERVAL")
+	_ = viper.BindEnv("SEO_URL")
+}
+
+func InitLogger(level zerolog.Level) {
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
-	zerolog.SetGlobalLevel(zerolog.InfoLevel)
+	zerolog.SetGlobalLevel(level)
 	log.Logger = log.Output(os.Stdout)
+}
+
+func init() {
+	InitEnv()
+	InitLogger(zerolog.DebugLevel)
 }
 
 var BenchmarkReadFromStorageNum int
@@ -27,33 +44,34 @@ func BenchmarkReadFromStorage(b *testing.B) {
 	log.Info().Msg("[" + strconv.Itoa(BenchmarkReadFromStorageNum) + "] Started BenchmarkReadFromStorage benchmark with " + strconv.Itoa(b.N) + " iterations.")
 	BenchmarkReadFromStorageNum++
 
-	s := New(config.Storage{
-		InitStorageLengthPerShard: 128,
-		EvictionAlgo:              string(algo.LRU),
-		MemoryFillThreshold:       0.95,
-		MemoryLimit:               1024 * 1024 * 128,
-	})
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	seoRepo := repository.NewSeo()
-
-	cfg := config.Response{
-		RevalidateBeta:     0.5,
-		RevalidateInterval: time.Minute * 1,
+	cfg := config.Config{
+		Storage: config.Storage{
+			InitStorageLengthPerShard: 256,
+			EvictionAlgo:              "LRU",
+			MemoryFillThreshold:       0.95,
+			MemoryLimit:               1024 * 1024 * 128,
+		},
+		Response: config.Response{
+			RevalidateBeta:     0.5,
+			RevalidateInterval: time.Minute * 1,
+		},
+		Repository: config.Repository{
+			SeoUrl: "https://seo-master.lux.kube.xbet.lan/api/v2/pagedata",
+		},
 	}
+
+	db := New(cfg)
+	//seoRepo := repository.NewSeo(cfg.Repository)
 
 	requests := make([]*model.Request, 0, b.N)
 	for i := 0; i < b.N; i++ {
-		req := model.NewRequest("285", "1xbet.com", "en", `{"name": "betting", "choice": null}`+strconv.Itoa(i))
-		resp, err := model.NewResponse(cfg, http.Header{}, req, []byte(`{"data": "success"}`), func() ([]byte, error) {
-			return seoRepo.PageData()
+		req := model.NewRequest("285", "1xbet.com", "en", `{"name": "betting", "choice": null}`)
+		_, _, _, _, _ = db.Get(ctx, req, func(ctx context.Context, req *model.Request) (statusCode int, body []byte, headers http.Header, err error) {
+			return 200, []byte(`{"data": {"success": true}}`), http.Header{}, nil
 		})
-		if err != nil {
-			panic(err)
-		}
-		s.Set(ctx, resp)
 		requests = append(requests, req)
 	}
 
@@ -65,7 +83,16 @@ func BenchmarkReadFromStorage(b *testing.B) {
 		t := time.Duration(0)
 		for pb.Next() {
 			tc := time.Now()
-			s.Get(requests[i%b.N])
+			_, _, _, found, err := db.Get(ctx, requests[i%b.N], func(ctx context.Context, req *model.Request) (statusCode int, body []byte, headers http.Header, err error) {
+				return 200, []byte(`{"data": {"success": true}}`), http.Header{}, nil
+			})
+			if err != nil {
+				log.Error().Err(err).Msg("failed to fetch")
+				panic(err)
+			}
+			if !found {
+				log.Error().Msg("not found in cache")
+			}
 			t += time.Since(tc)
 			i++
 		}
@@ -86,33 +113,33 @@ func BenchmarkWriteIntoStorage(b *testing.B) {
 	log.Info().Msg("[" + strconv.Itoa(BenchmarkReadFromStorageNum) + "] Started BenchmarkWriteIntoStorage benchmark with " + strconv.Itoa(b.N) + " iterations.")
 	BenchmarkWriteIntoStorageNum++
 
-	s := New(config.Storage{
-		InitStorageLengthPerShard: 128,
-		EvictionAlgo:              string(algo.LRU),
-		MemoryFillThreshold:       0.95,
-		MemoryLimit:               1024 * 1024 * 128,
-	})
+	cfg := config.Config{
+		Storage: config.Storage{
+			InitStorageLengthPerShard: 256,
+			EvictionAlgo:              "LRU",
+			MemoryFillThreshold:       0.95,
+			MemoryLimit:               1024 * 1024 * 128,
+		},
+		Response: config.Response{
+			RevalidateBeta:     0.5,
+			RevalidateInterval: time.Minute * 1,
+		},
+		Repository: config.Repository{
+			SeoUrl: "https://seo-master.lux.kube.xbet.lan/api/v2/pagedata",
+		},
+	}
+
+	s := New(cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	seoRepo := repository.NewSeo()
+	//seoRepo := repository.NewSeo(config.Repository{SeoUrl: "https://seo-master.lux.kube.xbet.lan/api/v2/pagedata"})
 
-	cfg := config.Response{
-		RevalidateBeta:     0.5,
-		RevalidateInterval: time.Minute * 10,
-	}
-
-	responses := make([]*model.Response, b.N)
+	requests := make([]*model.Request, b.N)
 	for i := 0; i < b.N; i++ {
 		req := model.NewRequest("285", "1xbet.com", "en", `{"name": "betting", "choice": null}`+strconv.Itoa(i))
-		resp, err := model.NewResponse(cfg, http.Header{}, req, []byte(`{"data": "success"}`), func() ([]byte, error) {
-			return seoRepo.PageData()
-		})
-		if err != nil {
-			panic(err)
-		}
-		responses[i] = resp
+		requests[i] = req
 	}
 
 	ii := 0
@@ -123,7 +150,9 @@ func BenchmarkWriteIntoStorage(b *testing.B) {
 		t := time.Duration(0)
 		for pb.Next() {
 			tc := time.Now()
-			s.Set(ctx, responses[i%b.N])
+			s.Get(ctx, requests[i%b.N], func(ctx context.Context, req *model.Request) (statusCode int, body []byte, headers http.Header, err error) {
+				return 200, []byte(`{"data": {"success": true}}`), http.Header{}, nil
+			})
 			t += time.Since(tc)
 			i++
 		}

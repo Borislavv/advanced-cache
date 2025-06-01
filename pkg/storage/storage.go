@@ -4,12 +4,13 @@ import (
 	"context"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/algo"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/cache"
+	"net/http"
 )
 
 type Storage interface {
-	Get(req *model.Request) (resp *model.Response, found bool)
-	Set(ctx context.Context, resp *model.Response)
+	// Get - returns the same slice headers as stored in origin *model.Response! Don't mutate it, just copy if you need some more than read.
+	Get(ctx context.Context, req *model.Request, fn model.ResponseCreator) (statusCode int, body []byte, headers http.Header, found bool, err error)
 	Del(req *model.Request)
 }
 
@@ -17,13 +18,13 @@ type AlgoStorage struct {
 	Storage
 }
 
-func New(cfg config.Storage) *AlgoStorage {
+func New(cfg config.Config) *AlgoStorage {
 	var s Storage
-	switch algo.Algorithm(cfg.EvictionAlgo) {
-	case algo.LRU:
-		s = algo.NewLRU(cfg)
+	switch cache.Algorithm(cfg.EvictionAlgo) {
+	case cache.LRU:
+		s = cache.NewLRU(cfg)
 	default:
-		panic(cfg.EvictionAlgo + " algorithm does not implemented yet")
+		panic("algorithm \"" + cfg.EvictionAlgo + "\" does not implemented yet")
 	}
 	return &AlgoStorage{Storage: s}
 }

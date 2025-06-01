@@ -1,4 +1,4 @@
-package algo
+package cache
 
 // Algorithm is the string type for caching algorithms labels.
 type Algorithm string

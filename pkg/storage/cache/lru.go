@@ -1,4 +1,4 @@
-package algo
+package cache
 
 import (
 	"container/list"
@@ -9,14 +9,13 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
 	"github.com/rs/zerolog/log"
 	"math"
+	"net/http"
 	"sync"
 	"sync/atomic"
 )
 
 const (
-	maxEvictors           = 5
-	maxEvictionsPreIter   = 10
-	maxEvictionIterations = 10
+	maxEvictors = 5
 )
 
 type OrderedList struct {
@@ -36,7 +35,7 @@ func (l *OrderedList) Size() uintptr {
 }
 
 type LRUAlgo struct {
-	cfg config.Storage
+	cfg config.Config
 
 	shardedMap        *sharded.Map[uint64, *model.Response]
 	activeEvictors    *atomic.Int32
@@ -46,7 +45,7 @@ type LRUAlgo struct {
 	shardedOrderedList [sharded.ShardCount]*OrderedList
 }
 
-func NewLRU(cfg config.Storage) *LRUAlgo {
+func NewLRU(cfg config.Config) *LRUAlgo {
 	lru := &LRUAlgo{
 		cfg:               cfg,
 		shardedMap:        sharded.NewMap[uint64, *model.Response](cfg.InitStorageLengthPerShard),
@@ -61,24 +60,46 @@ func NewLRU(cfg config.Storage) *LRUAlgo {
 	return lru
 }
 
-func (c *LRUAlgo) Get(req *model.Request) (resp *model.Response, found bool) {
+func (c *LRUAlgo) Get(
+	ctx context.Context, req *model.Request, fn model.ResponseCreator,
+) (
+	statusCode int, body []byte, headers http.Header, found bool, err error,
+) {
 	key := req.UniqueKey()
 	shardKey := c.shardedMap.GetShardKey(key)
 
-	resp, found = c.shardedMap.Get(key, shardKey)
-	if !found {
-		return nil, false
+	resp, ok := c.shardedMap.Get(key, shardKey)
+	if !ok {
+		resp, err = c.computeResponse(ctx, req, fn)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to compute response")
+			return http.StatusInternalServerError, nil, nil, false, err
+		}
+		c.set(ctx, resp)
+		statusCode, body, headers = resp.Get()
+		return statusCode, body, headers, false, nil
 	}
+
 	c.recordHit(shardKey, resp)
-
 	if resp.ShouldBeRevalidated() {
-		go resp.Revalidate()
+		go resp.Revalidate(ctx)
 	}
-
-	return resp, true
+	statusCode, body, headers = resp.Get()
+	return statusCode, body, headers, true, nil
 }
 
-func (c *LRUAlgo) Set(ctx context.Context, resp *model.Response) {
+func (c *LRUAlgo) computeResponse(ctx context.Context, req *model.Request, fn model.ResponseCreator) (*model.Response, error) {
+	statusCode, data, header, err := fn(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return model.NewResponse(
+		header, statusCode, req, data, fn,
+		c.cfg.RevalidateInterval, c.cfg.RevalidateBeta,
+	)
+}
+
+func (c *LRUAlgo) set(ctx context.Context, resp *model.Response) {
 	key := resp.GetRequest().UniqueKey()
 	shardKey := c.shardedMap.GetShardKey(key)
 
