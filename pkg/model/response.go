@@ -9,6 +9,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"math"
 	"math/rand"
+	"net/http"
 	"sync"
 	"time"
 	"unsafe"
@@ -29,16 +30,17 @@ type Response struct {
 }
 
 type Datum struct {
-	data          []byte // raw data of response
+	headers       http.Header
+	body          []byte // raw body of response
 	lastAccess    time.Time
 	revalidatedAt time.Time // last revalidated timestamp
 }
 
 func NewResponse(
 	cfg config.Response,
-	item *list.Element,
+	headers http.Header,
 	req *Request,
-	data []byte,
+	body []byte,
 	seoRepo repository.Seo,
 ) (*Response, error) {
 	tags, err := ExtractTags(req.GetChoice())
@@ -46,15 +48,15 @@ func NewResponse(
 		return nil, fmt.Errorf("cannot extract tags from choice: %s", err.Error())
 	}
 	return &Response{
-		mu:          &sync.RWMutex{},
-		cfg:         cfg,
-		request:     req,
-		seoRepo:     seoRepo,
-		tags:        tags,
-		listElement: item,
-		createdAt:   time.Now(),
+		mu:        &sync.RWMutex{},
+		cfg:       cfg,
+		request:   req,
+		seoRepo:   seoRepo,
+		tags:      tags,
+		createdAt: time.Now(),
 		Datum: &Datum{
-			data:          data,
+			headers:       headers,
+			body:          body,
 			lastAccess:    time.Now(),
 			revalidatedAt: time.Now(),
 		},
@@ -72,7 +74,7 @@ func (r *Response) Revalidate() {
 	r.lastAccess = time.Now()
 	r.frequency = r.frequency + 1
 	r.revalidatedAt = time.Now()
-	r.data = data
+	r.body = data
 	return
 }
 func (r *Response) ShouldBeRevalidated() bool {
@@ -106,77 +108,6 @@ func (r *Response) GetRequest() *Request {
 	r.mu.RUnlock()
 	return req
 }
-func (r *Response) SetRequest(req *Request) {
-	r.mu.Lock()
-	r.request = req
-	r.mu.Unlock()
-}
-func (r *Response) GetData() []byte {
-	r.mu.RLock()
-	data := r.data
-	r.mu.RUnlock()
-	return data
-}
-func (r *Response) SetData(data []byte) {
-	r.mu.Lock()
-	r.data = data
-	r.revalidatedAt = time.Now()
-	r.mu.Unlock()
-}
-func (r *Response) GetTags() []string {
-	r.mu.RLock()
-	tags := r.tags
-	r.mu.RUnlock()
-	return tags
-}
-func (r *Response) SetTags(tags []string) {
-	r.mu.Lock()
-	r.tags = tags
-	r.mu.Unlock()
-}
-func (r *Response) GetFrequency() int {
-	r.mu.RLock()
-	frequency := r.frequency
-	r.mu.RUnlock()
-	return frequency
-}
-func (r *Response) SetFrequency(frequency int) {
-	r.mu.Lock()
-	r.frequency = frequency
-	r.mu.Unlock()
-}
-func (r *Response) GetLastAccess() time.Time {
-	r.mu.RLock()
-	lastAccess := r.lastAccess
-	r.mu.RUnlock()
-	return lastAccess
-}
-func (r *Response) SetLastAccess() {
-	r.mu.Lock()
-	r.lastAccess = time.Now()
-	r.mu.Unlock()
-}
-func (r *Response) GetCreatedAt() time.Time {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.createdAt
-}
-
-func (r *Response) GetRevalidatedAt() time.Time {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.revalidatedAt
-}
-func (r *Response) SetRevalidatedAt() {
-	r.mu.Lock()
-	r.revalidatedAt = time.Now()
-	r.mu.Unlock()
-}
-func (r *Response) GetRevalidateInterval() time.Duration {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.cfg.RevalidateInterval
-}
 func (r *Response) Touch() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -204,6 +135,16 @@ func (r *Response) SetDatum(meta *Datum) {
 	r.mu.Lock()
 	r.Datum = meta
 	r.mu.Unlock()
+}
+func (r *Response) GetBody() []byte {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.body
+}
+func (r *Response) GetHeaders() http.Header {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.headers
 }
 func (r *Response) Size() uintptr {
 	return unsafe.Sizeof(*r)

@@ -17,11 +17,11 @@ type AlgoStorage struct {
 	Storage
 }
 
-func New(cfg config.Storage, defaultLen int) *AlgoStorage {
+func New(cfg config.Storage) *AlgoStorage {
 	var s Storage
 	switch algo.Algorithm(cfg.EvictionAlgo) {
 	case algo.LRU:
-		s = algo.NewLRU(cfg, defaultLen)
+		s = algo.NewLRU(cfg)
 	default:
 		panic(cfg.EvictionAlgo + " algorithm does not implemented yet")
 	}

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"container/list"
 	"context"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
@@ -29,8 +28,7 @@ func init() {
 		EvictionAlgo:        string(algo.LRU),
 		MemoryFillThreshold: 0.85,
 		MemoryLimit:         1024 * 1024 * 10,
-		EvictionParallelism: 10,
-	}, 100)
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -45,7 +43,7 @@ func init() {
 	reqs = make([]*model.Request, 0, 10000)
 	for i := 0; i < 10000; i++ {
 		req := model.NewRequest("285", "1xbet.com", "en", `{"name": "betting", "choice": null}`+strconv.Itoa(i))
-		resp, err := model.NewResponse(cfg, &list.Element{}, req, []byte(`{"data": "success"}`), seoRepo)
+		resp, err := model.NewResponse(cfg, http.Header{}, req, []byte(`{"data": "success"}`), seoRepo)
 		if err != nil {
 			panic(err)
 		}

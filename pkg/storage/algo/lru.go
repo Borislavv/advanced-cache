@@ -39,19 +39,17 @@ type LRUAlgo struct {
 	cfg config.Storage
 
 	shardedMap        *sharded.Map[uint64, *model.Response]
-	evictionThreshold uintptr
 	activeEvictors    *atomic.Int32
+	evictionThreshold uintptr
 
-	semaCh chan struct{}
 	// list from newest to oldest
 	shardedOrderedList [sharded.ShardCount]*OrderedList
 }
 
-func NewLRU(cfg config.Storage, defaultLen int) *LRUAlgo {
+func NewLRU(cfg config.Storage) *LRUAlgo {
 	lru := &LRUAlgo{
 		cfg:               cfg,
-		shardedMap:        sharded.NewMap[uint64, *model.Response](defaultLen),
-		semaCh:            make(chan struct{}, cfg.EvictionParallelism),
+		shardedMap:        sharded.NewMap[uint64, *model.Response](cfg.InitStorageLengthPerShard),
 		evictionThreshold: uintptr(math.Round(cfg.MemoryLimit * cfg.MemoryFillThreshold)),
 		activeEvictors:    &atomic.Int32{},
 	}
@@ -109,21 +107,21 @@ func (c *LRUAlgo) isEvictionNecessaryAndAvailable() bool {
 
 func (c *LRUAlgo) evict(ctx context.Context, key uint) {
 	c.activeEvictors.Add(1)
+	evictor := c.activeEvictors
 	defer c.activeEvictors.Add(-1)
 
-	memDiff := int64(c.shardedMap.Mem() - c.evictionThreshold)
-	if memDiff <= 0 {
-		return
+	if needEvictMemory := int(c.shardedMap.Mem() - c.evictionThreshold); needEvictMemory > 0 {
+		weighPerItem := int(c.shardedMap.Mem()) / int(c.shardedMap.Len())
+		numberOfItemsForEviction := needEvictMemory/weighPerItem + 1
+
+		evicted := c.evictBatch(ctx, key, numberOfItemsForEviction)
+
+		log.Debug().Msgf(
+			"[EVICTOR: #%d] LRU: evicted %d items (mem: %s, len: %d)",
+			evictor, evicted, utils.FmtMem(c.shardedMap.Mem()), c.shardedMap.Len(),
+		)
 	}
 
-	memItem := int64(c.shardedMap.Mem()) / c.shardedMap.Len()
-
-	itemsForEviction := int(memDiff/memItem) + (c.cfg.EvictionParallelism)
-
-	evicted := c.evictBatch(ctx, key, itemsForEviction)
-	_ = evicted
-
-	log.Debug().Msgf("LRU: evicted %d items (mem: %s, len: %d)", evicted, utils.FmtMem(c.shardedMap.Mem()), c.shardedMap.Len())
 }
 
 func (c *LRUAlgo) evictBatch(ctx context.Context, shardKey uint, num int) int {
@@ -151,9 +149,7 @@ func (c *LRUAlgo) evictBatch(ctx context.Context, shardKey uint, num int) int {
 
 func (c *LRUAlgo) recordHit(shardKey uint, resp *model.Response) {
 	resp.Touch()
-
 	el := resp.GetListElement()
-
 	c.moveToFront(shardKey, el)
 }
 
