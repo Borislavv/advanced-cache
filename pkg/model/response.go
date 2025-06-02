@@ -17,6 +17,8 @@ import (
 
 const nameToken = "name"
 
+type ResponseCreator = func() (statusCode int, body []byte, headers http.Header, err error)
+
 type Response struct {
 	*Datum
 	mu            *sync.RWMutex
@@ -26,13 +28,14 @@ type Response struct {
 	tags          []string // choice names as tags
 	listElement   *list.Element
 	revalidatedAt time.Time // last revalidated timestamp
-	revalidator   func() ([]byte, error)
+	revalidator   ResponseCreator
 	createdAt     time.Time
 }
 
 type Datum struct {
-	headers http.Header
-	body    []byte // raw body of response
+	headers    http.Header
+	statusCode int
+	body       []byte // raw body of response
 }
 
 func NewResponse(
@@ -40,7 +43,7 @@ func NewResponse(
 	headers http.Header,
 	req *Request,
 	body []byte,
-	revalidator func() ([]byte, error),
+	revalidator ResponseCreator,
 ) (*Response, error) {
 	tags, err := ExtractTags(req.GetChoice())
 	if err != nil {
@@ -67,7 +70,7 @@ func (r *Response) Revalidate() {
 	revalidator := r.revalidator
 	r.mu.RUnlock()
 
-	data, err := revalidator()
+	code, bytes, headers, err := revalidator()
 	if err != nil {
 		log.Warn().Err(err).Msg("revalidator failed")
 		return
@@ -75,7 +78,9 @@ func (r *Response) Revalidate() {
 
 	r.mu.Lock()
 	r.revalidatedAt = time.Now()
-	r.body = data
+	r.body = bytes
+	r.headers = headers
+	r.statusCode = code
 	r.mu.Unlock()
 	return
 }

@@ -47,8 +47,8 @@ func BenchmarkReadFromStorage(b *testing.B) {
 	requests := make([]*model.Request, 0, b.N)
 	for i := 0; i < b.N; i++ {
 		req := model.NewRequest("285", "1xbet.com", "en", `{"name": "betting", "choice": null}`+strconv.Itoa(i))
-		resp, err := model.NewResponse(cfg, http.Header{}, req, []byte(`{"data": "success"}`), func() ([]byte, error) {
-			return seoRepo.PageData()
+		resp, err := model.NewResponse(cfg, http.Header{}, req, []byte(`{"data": "success"}`), func() (statusCode int, body []byte, headers http.Header, err error) {
+			return seoRepo.PageData(ctx, req)
 		})
 		if err != nil {
 			panic(err)
