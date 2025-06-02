@@ -5,8 +5,8 @@ import (
 	"errors"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
 	"github.com/rs/zerolog/log"
-	"io"
 	"net/http"
 )
 
@@ -45,15 +45,14 @@ func (s *SeoRepository) PageData(ctx context.Context, req *model.Request) (statu
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		log.Error().Msg("not 200 status code received from pagedata")
 		return resp.StatusCode, nil, nil, errors.New("not 200 status code received from pagedata")
 	}
 
-	body, err = io.ReadAll(resp.Body)
+	body, err = utils.ReadResponseBody(resp)
 	if err != nil {
 		log.Err(err).Msg("failed to read response body")
 		return resp.StatusCode, nil, nil, err
 	}
 
-	return resp.StatusCode, body, resp.Header.Clone(), nil
+	return resp.StatusCode, body, resp.Header, nil
 }

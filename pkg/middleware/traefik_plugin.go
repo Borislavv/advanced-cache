@@ -70,7 +70,7 @@ func (p *Plugin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	creator := func(ctx context.Context, req *model.Request) (int, []byte, http.Header, error) {
 		clonedWriter := newCaptureResponseWriter(w)
 		p.next.ServeHTTP(clonedWriter, r)
-		return clonedWriter.statusCode, clonedWriter.body.Bytes(), clonedWriter.Header().Clone(), nil
+		return clonedWriter.statusCode, clonedWriter.body.Bytes(), clonedWriter.Header(), nil
 	}
 
 	statusCode, body, headers, found, err := p.storage.Get(ctx, req, creator)

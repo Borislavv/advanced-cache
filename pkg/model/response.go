@@ -28,8 +28,6 @@ type Response struct {
 	listElement        *list.Element
 	tags               []string // choice names as tags
 	creator            ResponseCreator
-	frequency          int // number of times of response was accessed
-	lastAccess         time.Time
 	revalidateInterval time.Duration
 	revalidateBeta     float64
 	revalidatedAt      time.Time // last revalidated timestamp
@@ -68,7 +66,6 @@ func NewResponse(
 		revalidateInterval: revalidateInterval,
 		revalidateBeta:     revalidateBeta,
 		revalidatedAt:      time.Now(),
-		lastAccess:         time.Now(),
 		createdAt:          time.Now(),
 	}, nil
 }
@@ -141,12 +138,6 @@ func (r *Response) GetRequest() *Request {
 	req := r.request
 	r.mu.RUnlock()
 	return req
-}
-func (r *Response) Touch() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.lastAccess = time.Now()
-	r.frequency = r.frequency + 1
 }
 func (r *Response) GetListElement() *list.Element {
 	r.mu.RLock()

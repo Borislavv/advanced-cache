@@ -11,9 +11,11 @@ import (
 	"github.com/spf13/viper"
 	"gitlab.xbet.lan/v3group/backend/packages/go/logger/pkg/logger"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"runtime"
+	"runtime/pprof"
 	"strconv"
 	"syscall"
 )
@@ -39,6 +41,18 @@ func main() {
 			log.Info().Msg("server stopped")
 		}
 	}()
+	// Создаём файл для сохранения профиля
+	f, err := os.Create("cpu.pprof")
+	if err != nil {
+		panic("could not create CPU profile: " + err.Error())
+	}
+	defer f.Close()
+
+	// Запускаем CPU-профилирование
+	if err = pprof.StartCPUProfile(f); err != nil {
+		panic("could not start CPU profile: " + err.Error())
+	}
+	defer pprof.StopCPUProfile() // важно остановить!
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -77,31 +91,31 @@ func main() {
 }
 
 func getData(ctx context.Context, db storage.Storage, seoRepo repository.Seo, req *model.Request) {
-	_, _, _, err := db.Get(ctx, req, seoRepo.PageData)
+	_, _, _, _, err := db.Get(ctx, req, seoRepo.PageData)
 	if err != nil {
 		log.Err(err).Msg("failed to get body")
 		return
 	}
 
-	_, _, _, err = db.Get(ctx, req, seoRepo.PageData)
+	_, _, _, _, err = db.Get(ctx, req, seoRepo.PageData)
 	if err != nil {
 		log.Err(err).Msg("failed to get body")
 		return
 	}
 
-	_, _, _, err = db.Get(ctx, req, seoRepo.PageData)
+	_, _, _, _, err = db.Get(ctx, req, seoRepo.PageData)
 	if err != nil {
 		log.Err(err).Msg("failed to get body")
 		return
 	}
 
-	_, _, _, err = db.Get(ctx, req, seoRepo.PageData)
+	_, _, _, _, err = db.Get(ctx, req, seoRepo.PageData)
 	if err != nil {
 		log.Err(err).Msg("failed to get body")
 		return
 	}
 
-	_, _, _, err = db.Get(ctx, req, seoRepo.PageData)
+	_, _, _, _, err = db.Get(ctx, req, seoRepo.PageData)
 	if err != nil {
 		log.Err(err).Msg("failed to get body")
 		return

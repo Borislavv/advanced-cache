@@ -103,13 +103,6 @@ func (c *LRUAlgo) set(ctx context.Context, resp *model.Response) {
 	key := resp.GetRequest().UniqueKey()
 	shardKey := c.shardedMap.GetShardKey(key)
 
-	r, found := c.shardedMap.Get(key, shardKey)
-	if found {
-		c.recordHit(shardKey, r)
-		r.SetDatum(resp.GetDatum())
-		return
-	}
-
 	if c.isEvictionNecessaryAndAvailable() {
 		go c.evict(ctx, shardKey)
 	}
@@ -169,13 +162,10 @@ func (c *LRUAlgo) evictBatch(ctx context.Context, shardKey uint, num int) int {
 }
 
 func (c *LRUAlgo) recordHit(shardKey uint, resp *model.Response) {
-	resp.Touch()
-	el := resp.GetListElement()
-	c.moveToFront(shardKey, el)
+	c.moveToFront(shardKey, resp.GetListElement())
 }
 
 func (c *LRUAlgo) recordPush(shardKey uint, resp *model.Response) {
-	resp.Touch()
 	resp.SetListElement(c.pushToFront(shardKey, resp.GetRequest()))
 }
 
