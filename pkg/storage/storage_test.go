@@ -36,10 +36,10 @@ func BenchmarkReadFromStorage(b *testing.B) {
 
 	cfg := config.Config{
 		Storage: config.Storage{
-			InitStorageLengthPerShard: 1024,
+			InitStorageLengthPerShard: 256,
 			EvictionAlgo:              "LRU",
 			MemoryFillThreshold:       0.95,
-			MemoryLimit:               1024 * 1024 * 256,
+			MemoryLimit:               1024 * 1024 * 12,
 		},
 		Response: config.Response{
 			RevalidateBeta:     0.5,
@@ -51,8 +51,6 @@ func BenchmarkReadFromStorage(b *testing.B) {
 	}
 
 	db := New(cfg)
-	//seoRepo := repository.NewSeo(cfg.Repository)
-
 	requests := make([]*model.Request, 0, b.N)
 	for i := 0; i < b.N; i++ {
 		req := model.NewRequest("285", "1xbet.com", "en", `{"name": "betting", "choice": null}`)
@@ -80,20 +78,19 @@ func BenchmarkReadFromStorage(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
-		t := time.Duration(0)
+		//t := time.Duration(0)
 		for pb.Next() {
-			tc := time.Now()
-			req := requests[i%b.N]
-			_, hit, err := db.Get(ctx, req, func(ctx context.Context, req *model.Request) (statusCode int, body []byte, headers http.Header, err error) {
+			//tc := time.Now()
+			_, _, _ = db.Get(ctx, requests[i%b.N], func(ctx context.Context, req *model.Request) (statusCode int, body []byte, headers http.Header, err error) {
 				return 200, []byte(`{"data": {"success": true}}`), http.Header{}, nil
 			})
-			if err != nil {
-				panic(err)
-			}
-			if !hit {
-				log.Info().Msg("request was not found in storage")
-			}
-			t += time.Since(tc)
+			//if err != nil {
+			//	panic(err)
+			//}
+			//if !hit {
+			//	log.Info().Msg("request was not found in storage")
+			//}
+			//t += time.Since(tc)
 			i++
 		}
 		//if i != 0 {

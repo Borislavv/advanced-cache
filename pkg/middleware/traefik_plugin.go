@@ -73,8 +73,7 @@ func (p *Plugin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return clonedWriter.statusCode, clonedWriter.body.Bytes(), clonedWriter.Header(), nil
 	}
 
-	statusCode, body, headers, found, err := p.storage.Get(ctx, req, creator)
-	w.WriteHeader(p.chooseStatusCode(statusCode))
+	resp, isHit, err := p.storage.Get(ctx, req, creator)
 	if err != nil {
 		log.Err(err).Msg("error while fetching from storage")
 		w.WriteHeader(http.StatusInternalServerError)
@@ -84,14 +83,15 @@ func (p *Plugin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.WriteHeader(p.chooseStatusCode(resp.StatusCode()))
 	w.Header().Add("X-From-Http-Cache-Proxy", "true")
-	w.Header().Add("X-Hit-Http-Cache-Proxy", utils.BoolToString(found))
-	if _, werr := w.Write(body); werr != nil {
+	w.Header().Add("X-Hit-Http-Cache-Proxy", utils.BoolToString(isHit))
+	if _, werr := w.Write(resp.GetBody()); werr != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Err(werr).Msg("error while writing response into http.ResponseWriter")
 		return
 	}
-	for headerName, v := range headers {
+	for headerName, v := range resp.GetHeaders() {
 		for _, headerValue := range v {
 			w.Header().Add(headerName, headerValue)
 		}
