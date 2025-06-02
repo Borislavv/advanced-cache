@@ -3,14 +3,12 @@ package storage
 import (
 	"context"
 	"net/http"
-	"strconv"
 	"testing"
 	"time"
 
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	"github.com/joho/godotenv"
-	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
 )
 
@@ -34,7 +32,7 @@ func BenchmarkReadFromStorage(b *testing.B) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	log.Info().Msgf("[" + strconv.Itoa(BenchmarkReadFromStorageNum) + "] Started BenchmarkReadFromStorage benchmark with " + strconv.Itoa(b.N) + " iterations.")
+	// log.Info().Msgf("[" + strconv.Itoa(BenchmarkReadFromStorageNum) + "] Started BenchmarkReadFromStorage benchmark with " + strconv.Itoa(b.N) + " iterations.")
 	BenchmarkReadFromStorageNum++
 
 	cfg := config.Config{
@@ -91,7 +89,7 @@ func BenchmarkReadFromStorage(b *testing.B) {
 			//	panic(err)
 			//}
 			//if !hit {
-			//	log.Info().Msg("request was not found in storage")
+			//	// log.Info().Msg("request was not found in storage")
 			//}
 			//t += time.Since(tc)
 			i++
@@ -110,7 +108,7 @@ func BenchmarkReadFromStorage(b *testing.B) {
 //var BenchmarkWriteIntoStorageNum int
 //
 //func BenchmarkWriteIntoStorage(b *testing.B) {
-//	log.Info().Msg("[" + strconv.Itoa(BenchmarkReadFromStorageNum) + "] Started BenchmarkWriteIntoStorage benchmark with " + strconv.Itoa(b.N) + " iterations.")
+//	// log.Info().Msg("[" + strconv.Itoa(BenchmarkReadFromStorageNum) + "] Started BenchmarkWriteIntoStorage benchmark with " + strconv.Itoa(b.N) + " iterations.")
 //	BenchmarkWriteIntoStorageNum++
 //
 //	cfg := config.Config{
@@ -157,12 +155,12 @@ func BenchmarkReadFromStorage(b *testing.B) {
 //			i++
 //		}
 //		if i != 0 {
-//			log.Info().Msgf("["+strconv.Itoa(BenchmarkWriteIntoStorageNum)+
+//			// log.Info().Msgf("["+strconv.Itoa(BenchmarkWriteIntoStorageNum)+
 //				"] BenchmarkWriteIntoStorage b.N: %d, avg duration: %s ns/op", i, strconv.Itoa((int(t.Nanoseconds())/i)/10))
 //		}
 //		tt += t
 //		ii += i
 //	})
-//	log.Info().Msgf("["+strconv.Itoa(BenchmarkWriteIntoStorageNum)+
+//	// log.Info().Msgf("["+strconv.Itoa(BenchmarkWriteIntoStorageNum)+
 //		"] TOTAL --->>> BenchmarkWriteIntoStorage total b.N: %d, total avg duration: %s ns/op", ii, strconv.Itoa((int(tt.Nanoseconds())/ii)/10))
 //}

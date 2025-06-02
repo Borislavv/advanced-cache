@@ -13,7 +13,6 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
 	"github.com/joho/godotenv"
-	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
 )
 
@@ -25,12 +24,12 @@ type Config struct {
 
 func CreateConfig() *Config {
 	if err := godotenv.Load(); err != nil {
-		log.Err(err).Msg(".env file not found, skipping")
+		// log.Err(err).Msg(".env file not found, skipping")
 	}
 	viper.AutomaticEnv()
 	cfg := &Config{}
 	if err := viper.Unmarshal(cfg); err != nil {
-		log.Err(err).Msg("failed to unmarshal config")
+		// log.Err(err).Msg("failed to unmarshal config")
 	}
 	return cfg
 }
@@ -63,7 +62,7 @@ func (p *Plugin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		if _, werr := w.Write(internalServerErrorJson); werr != nil {
-			log.Err(err).Msg("error while writing response into http.ResponseWriter")
+			// log.Err(err).Msg("error while writing response into http.ResponseWriter")
 		}
 		return
 	}
@@ -76,10 +75,10 @@ func (p *Plugin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	resp, isHit, err := p.storage.Get(ctx, req, creator)
 	if err != nil {
-		log.Err(err).Msg("error while fetching from storage")
+		// log.Err(err).Msg("error while fetching from storage")
 		w.WriteHeader(http.StatusInternalServerError)
 		if _, werr := w.Write(internalServerErrorJson); werr != nil {
-			log.Err(werr).Msg("error while writing response into http.ResponseWriter")
+			// log.Err(werr).Msg("error while writing response into http.ResponseWriter")
 		}
 		return
 	}
@@ -89,7 +88,7 @@ func (p *Plugin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("X-Hit-Http-Cache-Proxy", utils.BoolToString(isHit))
 	if _, werr := w.Write(resp.GetBody()); werr != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		log.Err(werr).Msg("error while writing response into http.ResponseWriter")
+		// log.Err(werr).Msg("error while writing response into http.ResponseWriter")
 		return
 	}
 	for headerName, v := range resp.GetHeaders() {

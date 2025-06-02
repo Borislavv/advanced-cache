@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
-	"github.com/rs/zerolog/log"
 )
 
 const aggressiveBeta = 0.9 // aggressive revalidation (probably may be upped to 0.95 or 0.98-0.99)
@@ -84,10 +83,10 @@ func (r *Response) Revalidate(ctx context.Context) {
 	var err error
 	defer func() {
 		if err != nil {
-			log.Debug().Msg("revalidation failed")
+			// log.Debug().Msg("revalidation failed")
 		} else {
-			//log.Debug().Msg("success revalidated")
-			log.Debug().Msg("success revalidated")
+			//// log.Debug().Msg("success revalidated")
+			// log.Debug().Msg("success revalidated")
 		}
 	}()
 

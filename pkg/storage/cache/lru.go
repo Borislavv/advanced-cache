@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"hash/maphash"
+	"log"
 	"math"
 	"runtime"
 	"sync"
@@ -15,7 +16,6 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
-	"github.com/rs/zerolog/log"
 )
 
 var maxEvictors = int32(runtime.GOMAXPROCS(0))
@@ -82,7 +82,7 @@ func (c *LRUAlgo) debugInfoLogger(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker:
-			log.Info().Msgf("[CACHE] LRU: evicted %d keys at the last 5 seconds. "+
+			log.Printf("[CACHE] LRU: evicted %d keys at the last 5 seconds. "+
 				"Memory usage: %s, storage length: %d.", evicted, utils.FmtMemory(c.shardedMap.Mem()), c.shardedMap.Len())
 			evicted = 0
 		case evictedPerIter := <-c.evictedCh:
