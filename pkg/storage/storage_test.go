@@ -41,7 +41,12 @@ func BenchmarkReadFromStorage(b *testing.B) {
 		RevalidateInterval: time.Minute * 15,
 	}
 
-	responses, err := helper.GenerateRandomResponses(cfg, b.N)
+	length := 200
+	if b.N > length {
+		length = b.N
+	}
+
+	responses, err := helper.GenerateRandomResponses(cfg, length)
 	if err != nil {
 		panic(err)
 	}
@@ -56,7 +61,16 @@ func BenchmarkReadFromStorage(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		itr := 0
 		for pb.Next() {
-			_, _ = s.Get(requests[itr%b.N])
+			key := itr % b.N
+			if key > 100 {
+				for i := 0; i < 100; i++ {
+					_, _ = s.Get(requests[key-i])
+				}
+			} else {
+				for i := 0; i < 100; i++ {
+					_, _ = s.Get(requests[key+i])
+				}
+			}
 			itr++
 		}
 	})

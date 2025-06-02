@@ -6,7 +6,6 @@ import (
 	localesandlanguages "gitlab.xbet.lan/v3group/backend/packages/go/locales-and-languages"
 	"math/rand"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -22,15 +21,22 @@ func GenerateRandomRequests(num int) []*model.Request {
 	i := 0
 	for {
 		for _, lng := range localesandlanguages.WebnameList() {
+			_ = lng
 			for projectID := 1; projectID < 1000; projectID++ {
 				if i > num {
 					return list
 				}
+				//list = append(list, model.NewRequest(
+				//	strconv.Itoa(projectID),
+				//	"1xbet.com",
+				//	string(lng),
+				//	`{"name": "betting_`+strconv.Itoa(projectID*i)+`","choice": {"name": "betting_`+GenerateRandomString()+`_sport", "choice": null}}`,
+				//))
 				list = append(list, model.NewRequest(
-					strconv.Itoa(projectID),
+					"285",
 					"1xbet.com",
-					string(lng),
-					`{"name": "betting_`+strconv.Itoa(projectID*i)+`","choice": {"name": "betting_`+GenerateRandomString()+`_sport", "choice": null}}`,
+					"en",
+					`{"name": "jared", "choice": "null"}`,
 				))
 				i++
 			}
