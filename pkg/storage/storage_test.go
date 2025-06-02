@@ -5,17 +5,15 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	"github.com/joho/godotenv"
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
 	"net/http"
-	"os"
 	"strconv"
 	"testing"
 	"time"
 )
 
-func InitEnv() {
+func init() {
 	_ = godotenv.Load()
 	viper.AutomaticEnv()
 	_ = viper.BindEnv("INIT_STORAGE_LEN_PER_SHARD")
@@ -25,17 +23,6 @@ func InitEnv() {
 	_ = viper.BindEnv("REVALIDATE_BETA")
 	_ = viper.BindEnv("REVALIDATE_INTERVAL")
 	_ = viper.BindEnv("SEO_URL")
-}
-
-func InitLogger(level zerolog.Level) {
-	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
-	zerolog.SetGlobalLevel(level)
-	log.Logger = log.Output(os.Stdout)
-}
-
-func init() {
-	InitEnv()
-	InitLogger(zerolog.DebugLevel)
 }
 
 var BenchmarkReadFromStorageNum int
