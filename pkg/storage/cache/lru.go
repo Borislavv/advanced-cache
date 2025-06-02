@@ -10,13 +10,13 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
 	"github.com/rs/zerolog/log"
 	"math"
+	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
-const (
-	maxEvictors = 5
-)
+var maxEvictors = int32(runtime.GOMAXPROCS(0))
 
 type OrderedList struct {
 	mu *sync.Mutex
@@ -43,6 +43,8 @@ type LRUAlgo struct {
 
 	// list from newest to oldest
 	shardedOrderedList [sharded.ShardCount]*OrderedList
+
+	evictedCh chan int
 }
 
 func NewLRU(cfg config.Config) *LRUAlgo {
@@ -51,6 +53,7 @@ func NewLRU(cfg config.Config) *LRUAlgo {
 		shardedMap:        sharded.NewMap[uint64, *model.Response](cfg.InitStorageLengthPerShard),
 		evictionThreshold: uintptr(math.Round(cfg.MemoryLimit * cfg.MemoryFillThreshold)),
 		activeEvictors:    &atomic.Int32{},
+		evictedCh:         make(chan int, maxEvictors),
 	}
 
 	for i := 0; i < sharded.ShardCount; i++ {
@@ -58,6 +61,23 @@ func NewLRU(cfg config.Config) *LRUAlgo {
 	}
 
 	return lru
+}
+
+func (c *LRUAlgo) logStatInfo(ctx context.Context) {
+	evicted := 0
+	ticker := utils.NewTicker(ctx, time.Second*5)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker:
+			log.Info().Msgf("[CACHE] LRU: evicted %d keys at the last 5 seconds. "+
+				"Memory usage: %s, storage length: %d.", evicted, utils.FmtMemory(c.shardedMap.Mem()), c.shardedMap.Len())
+			evicted = 0
+		case evictedPerIter := <-c.evictedCh:
+			evicted += evictedPerIter
+		}
+	}
 }
 
 func (c *LRUAlgo) Get(ctx context.Context, req *model.Request, fn model.ResponseCreator) (resp *model.Response, isHit bool, err error) {
@@ -126,7 +146,7 @@ func (c *LRUAlgo) evict(ctx context.Context, key uint) {
 
 		log.Debug().Msgf(
 			"[EVICTOR: #%d] LRU: evicted %d items (mem: %s, len: %d)",
-			evictor, evicted, utils.FmtMem(c.shardedMap.Mem()), c.shardedMap.Len(),
+			evictor, evicted, utils.FmtMemory(c.shardedMap.Mem()), c.shardedMap.Len(),
 		)
 	}
 
