@@ -53,7 +53,7 @@ func BenchmarkReadFromStorage(b *testing.B) {
 		},
 	}
 
-	db := New(cfg)
+	db := New(ctx, cfg)
 	requests := make([]*model.Request, 0, b.N)
 	for i := 0; i < b.N; i++ {
 		req := model.NewRequest("285", "1xbet.com", "en", `{"name": "betting", "choice": null}`)

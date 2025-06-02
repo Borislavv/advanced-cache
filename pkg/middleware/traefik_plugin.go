@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/http"
+	"time"
+
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/repository"
@@ -12,8 +15,6 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
-	"net/http"
-	"time"
 )
 
 var internalServerErrorJson = []byte(`{"error": {"message": "Internal server error."}}`)
@@ -50,7 +51,7 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) ht
 		name:    name,
 		config:  config,
 		seoRepo: repository.NewSeo(config.Repository),
-		storage: storage.New(config.Config),
+		storage: storage.New(ctx, config.Config),
 	}
 }
 
