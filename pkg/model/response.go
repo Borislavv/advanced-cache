@@ -135,6 +135,11 @@ func (r *Response) shouldRevalidateBeta(revalidatedAt time.Time, revalidateInter
 	now := time.Now()
 	age := now.Sub(revalidatedAt)
 
+	if revalidatedAt.Add(time.Duration(math.Ceil(float64(revalidateInterval) * beta))).After(time.Now()) {
+		// not yet
+		return false
+	}
+
 	if age >= revalidateInterval {
 		// properly expired, must be revalidated
 		return true
