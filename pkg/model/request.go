@@ -1,6 +1,7 @@
 package model
 
 import (
+	"github.com/rs/zerolog/log"
 	"github.com/zeebo/xxh3"
 	"sync"
 )
@@ -14,6 +15,7 @@ type Request struct {
 	// calculated fields
 	uniqueKey    uint64
 	uniqueString string
+	uniqueQuery  string
 }
 
 func NewRequest(project string, domain, language, choice string) *Request {
@@ -64,4 +66,34 @@ func (r *Request) strUnlocked() string {
 		r.uniqueString = r.project + "," + r.domain + "," + r.language + "," + r.choice
 	}
 	return r.uniqueString
+}
+func (r *Request) ToQuery() (string, error) {
+	r.mu.RLock()
+	project := r.project
+	domain := r.domain
+	language := r.language
+	tags, err := ExtractTags(r.choice)
+	if err != nil {
+		r.mu.RUnlock()
+		log.Err(err).Msg("failed to parse tags")
+		return "", err
+	}
+	r.mu.RUnlock()
+
+	if r.uniqueQuery == "" {
+		r.uniqueQuery = "?project[id]=" + project + "&domain=" + domain + "&language=" + language
+
+		l := len(tags) - 1
+		for i := l; i >= 0; i-- {
+			name := tags[i]
+			r.uniqueQuery += "&choice[name]=" + name
+			if i-1 >= 0 {
+				r.uniqueQuery += "&choice[choice]=" + tags[i-1]
+			} else {
+				r.uniqueQuery += "&choice[choice]=null"
+			}
+		}
+	}
+
+	return r.uniqueQuery, nil
 }
