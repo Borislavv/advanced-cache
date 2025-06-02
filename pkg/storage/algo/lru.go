@@ -11,6 +11,7 @@ import (
 	"math"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 const (
@@ -42,21 +43,44 @@ type LRUAlgo struct {
 
 	// list from newest to oldest
 	shardedOrderedList [sharded.ShardCount]*OrderedList
+
+	evictsCh chan int
 }
 
-func NewLRU(cfg config.Storage) *LRUAlgo {
+func NewLRU(ctx context.Context, cfg config.Storage) *LRUAlgo {
 	lru := &LRUAlgo{
 		cfg:               cfg,
 		shardedMap:        sharded.NewMap[uint64, *model.Response](cfg.InitStorageLengthPerShard),
 		evictionThreshold: uintptr(math.Round(cfg.MemoryLimit * cfg.MemoryFillThreshold)),
 		activeEvictors:    &atomic.Int32{},
+		evictsCh:          make(chan int, maxEvictors),
 	}
 
 	for i := 0; i < sharded.ShardCount; i++ {
 		lru.shardedOrderedList[i] = NewOrderedList()
 	}
 
+	go lru.debugInfoLogger(ctx)
+
 	return lru
+}
+
+func (c *LRUAlgo) debugInfoLogger(ctx context.Context) {
+	evictedPerSec := 0
+	t := utils.NewTicker(ctx, time.Second)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t:
+			log.Info().Msgf(
+				"LRU: evicted %d at the last second, now memory usage: %s, storage lenth: %d.",
+				evictedPerSec, utils.FmtMem(c.shardedMap.Mem()), c.shardedMap.Len(),
+			)
+		case evictedPerIter := <-c.evictsCh:
+			evictedPerSec += evictedPerIter
+		}
+	}
 }
 
 func (c *LRUAlgo) Get(req *model.Request) (resp *model.Response, found bool) {
@@ -105,21 +129,14 @@ func (c *LRUAlgo) isEvictionNecessaryAndAvailable() bool {
 
 func (c *LRUAlgo) evict(ctx context.Context, key uint) {
 	c.activeEvictors.Add(1)
-	evictor := c.activeEvictors
 	defer c.activeEvictors.Add(-1)
 
 	if needEvictMemory := int(c.shardedMap.Mem() - c.evictionThreshold); needEvictMemory > 0 {
 		weighPerItem := int(c.shardedMap.Mem()) / int(c.shardedMap.Len())
 		numberOfItemsForEviction := needEvictMemory/weighPerItem + 1
-
 		evicted := c.evictBatch(ctx, key, numberOfItemsForEviction)
-
-		log.Debug().Msgf(
-			"[EVICTOR: #%d] LRU: evicted %d items (mem: %s, len: %d)",
-			evictor, evicted, utils.FmtMem(c.shardedMap.Mem()), c.shardedMap.Len(),
-		)
+		c.evictsCh <- evicted
 	}
-
 }
 
 func (c *LRUAlgo) evictBatch(ctx context.Context, shardKey uint, num int) int {
