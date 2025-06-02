@@ -2,7 +2,7 @@ package storage
 
 import (
 	"context"
-	"net/http"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/helper"
 	"os"
 	"strconv"
 	"testing"
@@ -27,6 +27,8 @@ func BenchmarkReadFromStorage(b *testing.B) {
 	log.Info().Msg("[" + strconv.Itoa(BenchmarkReadFromStorageNum) + "] Started BenchmarkReadFromStorage benchmark with " + strconv.Itoa(b.N) + " iterations.")
 	BenchmarkReadFromStorageNum++
 
+	ctx := context.Background()
+
 	s := New(config.Storage{
 		InitStorageLengthPerShard: 128,
 		EvictionAlgo:              string(algo.LRU),
@@ -34,52 +36,30 @@ func BenchmarkReadFromStorage(b *testing.B) {
 		MemoryLimit:               1024 * 1024 * 128,
 	})
 
-	ctx := context.Background()
-
-	//seoRepo := repository.NewSeo(config.Repository{SeoUrl: "https://seo-master.lux.kube.xbet.lan/api/v2/pagedata"})
-
-	cfg := config.Response{
+	cfg := &config.Response{
 		RevalidateBeta:     0.5,
 		RevalidateInterval: time.Minute * 15,
 	}
 
-	requests := make([]*model.Request, 0, b.N)
-	for i := 0; i < b.N; i++ {
-		req := model.NewRequest("285", "1xbet.com", "en", `{"name": "betting", "choice": null}`+strconv.Itoa(i))
-		resp, err := model.NewResponse(
-			cfg, http.Header{}, req, []byte(`{"data": "success"}`),
-			func() (body []byte, err error) {
-				return []byte("{'success': 'true', 'data': null, 'err': 'none'}"), nil
-			},
-		)
-		if err != nil {
-			panic(err)
-		}
-		s.Set(ctx, resp)
-		requests = append(requests, req)
+	responses, err := helper.GenerateRandomResponses(cfg, b.N)
+	if err != nil {
+		panic(err)
 	}
 
-	ii := 0
-	tt := time.Duration(0)
+	requests := make([]*model.Request, 0, b.N)
+	for _, resp := range responses {
+		requests = append(requests, resp.GetRequest())
+		s.Set(ctx, resp)
+	}
+
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
-		i := 0
-		t := time.Duration(0)
+		itr := 0
 		for pb.Next() {
-			tc := time.Now()
-			_, _ = s.Get(requests[i%b.N])
-			t += time.Since(tc)
-			i++
+			_, _ = s.Get(requests[itr%b.N])
+			itr++
 		}
-		if i != 0 {
-			log.Info().Msgf("["+strconv.Itoa(BenchmarkReadFromStorageNum)+
-				"] BenchmarkReadFromStorage b.N: %d, avg duration: %s ns/op", i, strconv.Itoa((int(t.Nanoseconds())/i)/10))
-		}
-		tt += t
-		ii += i
 	})
-	log.Info().Msgf("["+strconv.Itoa(BenchmarkReadFromStorageNum)+
-		"] TOTAL --->>> BenchmarkReadFromStorage total b.N: %d, total avg duration: %s ns/op", ii, strconv.Itoa((int(tt.Nanoseconds())/ii)/10))
 }
 
 // var BenchmarkWriteIntoStorageNum int

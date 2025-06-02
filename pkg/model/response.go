@@ -19,7 +19,7 @@ const nameToken = "name"
 type Response struct {
 	*Datum
 	mu            *sync.RWMutex
-	cfg           config.Response
+	cfg           *config.Response
 	request       *Request // request for current response
 	tags          []string // choice names as tags
 	listElement   *list.Element
@@ -34,7 +34,7 @@ type Datum struct {
 }
 
 func NewResponse(
-	cfg config.Response,
+	cfg *config.Response,
 	headers http.Header,
 	req *Request,
 	body []byte,
@@ -107,9 +107,8 @@ func (r *Response) shouldRevalidateBeta(revalidatedAt time.Time, revalidateInter
 
 func (r *Response) GetRequest() *Request {
 	r.mu.RLock()
-	req := r.request
-	r.mu.RUnlock()
-	return req
+	defer r.mu.RUnlock()
+	return r.request
 }
 func (r *Response) GetListElement() *list.Element {
 	r.mu.RLock()
@@ -130,8 +129,8 @@ func (r *Response) GetDatum() *Datum {
 
 func (r *Response) SetDatum(meta *Datum) {
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.Datum = meta
-	r.mu.Unlock()
 }
 func (r *Response) GetBody() []byte {
 	r.mu.RLock()
