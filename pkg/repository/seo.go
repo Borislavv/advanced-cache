@@ -42,7 +42,7 @@ func (s *SeoRepository) PageData(ctx context.Context, req *model.Request) (statu
 		log.Err(err).Msg("failed to fetch pagedata")
 		return 0, nil, nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return resp.StatusCode, nil, nil, errors.New("not 200 status code received from pagedata")
