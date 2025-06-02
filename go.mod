@@ -3,7 +3,6 @@ module github.com/Borislavv/traefik-http-cache-plugin
 go 1.23.2
 
 require (
-	github.com/buger/jsonparser v1.1.1
 	github.com/joho/godotenv v1.5.1
 	github.com/rs/zerolog v1.34.0
 	github.com/spf13/viper v1.20.1
