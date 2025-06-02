@@ -160,7 +160,7 @@ func (c *LRUAlgo) evict(ctx context.Context, key uint) {
 		weighPerItem := int(c.shardedMap.Mem()) / int(c.shardedMap.Len())
 		numberOfItemsForEviction := needEvictMemory/weighPerItem + 1
 		evicted := c.evictBatch(ctx, key, numberOfItemsForEviction)
-		c.evictsCh <- evicted
+		c.evictedCh <- evicted
 	}
 }
 
