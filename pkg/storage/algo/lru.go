@@ -67,7 +67,7 @@ func NewLRU(ctx context.Context, cfg config.Storage) *LRUAlgo {
 
 func (c *LRUAlgo) debugInfoLogger(ctx context.Context) {
 	evictedPerSec := 0
-	t := utils.NewTicker(ctx, time.Second)
+	t := utils.NewTicker(ctx, time.Second*5)
 	for {
 		select {
 		case <-ctx.Done():
