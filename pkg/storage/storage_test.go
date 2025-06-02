@@ -2,10 +2,8 @@ package storage
 
 import (
 	"context"
-	"fmt"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/repository"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/algo"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -15,6 +13,8 @@ import (
 	"testing"
 	"time"
 )
+
+var bts = []byte("{success: true}")
 
 func init() {
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
@@ -28,35 +28,34 @@ func BenchmarkReadFromStorage(b *testing.B) {
 	log.Info().Msg("[" + strconv.Itoa(BenchmarkReadFromStorageNum) + "] Started BenchmarkReadFromStorage benchmark with " + strconv.Itoa(b.N) + " iterations.")
 	BenchmarkReadFromStorageNum++
 
-	s := New(config.Storage{
+	ctx := context.Background()
+
+	s := New(ctx, config.Storage{
 		InitStorageLengthPerShard: 128,
 		EvictionAlgo:              string(algo.LRU),
 		MemoryFillThreshold:       0.95,
 		MemoryLimit:               1024 * 1024 * 128,
 	})
 
-	ctx := context.Background()
-
-	seoRepo := repository.NewSeo(config.Repository{SeoUrl: "https://seo-master.lux.kube.xbet.lan/api/v2/pagedata"})
+	//seoRepo := repository.NewSeo(config.Repository{SeoUrl: "https://seo-master.lux.kube.xbet.lan/api/v2/pagedata"})
 
 	cfg := config.Response{
 		RevalidateBeta:     0.5,
-		RevalidateInterval: time.Minute * 1,
+		RevalidateInterval: time.Minute * 10,
 	}
 
 	requests := make([]*model.Request, 0, b.N)
 	for i := 0; i < b.N; i++ {
 		req := model.NewRequest("285", "1xbet.com", "en", `{"name": "betting", "choice": {"name": "betting_live", "choice": {"name": "betting_live_null", "choice": {"name": "betting_live_null_`+strconv.Itoa(i)+`", "choice": null}}}}`)
 		resp, err := model.NewResponse(
-			cfg, http.Header{}, req, 200, []byte(`{"data": "success"}`),
+			cfg, http.Header{}, req, 200, bts,
 			func() (statusCode int, body []byte, headers http.Header, err error) {
-				return seoRepo.PageData(ctx, req)
+				return 200, bts, http.Header{"Content-Type": []string{"application/json"}}, nil
 			},
 		)
 		if err != nil {
 			panic(err)
 		}
-		resp.Revalidate()
 		s.Set(ctx, resp)
 		requests = append(requests, req)
 	}
@@ -69,10 +68,7 @@ func BenchmarkReadFromStorage(b *testing.B) {
 		t := time.Duration(0)
 		for pb.Next() {
 			tc := time.Now()
-			resp, _ := s.Get(requests[i%b.N])
-			if ii%1000 == 0 {
-				fmt.Println(string(resp.GetBody()))
-			}
+			_, _ = s.Get(requests[i%b.N])
 			t += time.Since(tc)
 			i++
 		}
@@ -93,16 +89,16 @@ func BenchmarkWriteIntoStorage(b *testing.B) {
 	log.Info().Msg("[" + strconv.Itoa(BenchmarkReadFromStorageNum) + "] Started BenchmarkWriteIntoStorage benchmark with " + strconv.Itoa(b.N) + " iterations.")
 	BenchmarkWriteIntoStorageNum++
 
-	s := New(config.Storage{
+	ctx := context.Background()
+
+	s := New(ctx, config.Storage{
 		InitStorageLengthPerShard: 128,
 		EvictionAlgo:              string(algo.LRU),
 		MemoryFillThreshold:       0.95,
 		MemoryLimit:               1024 * 1024 * 128,
 	})
 
-	ctx := context.Background()
-
-	seoRepo := repository.NewSeo(config.Repository{SeoUrl: "https://seo-master.lux.kube.xbet.lan/api/v2/pagedata"})
+	//seoRepo := repository.NewSeo(config.Repository{SeoUrl: "https://seo-master.lux.kube.xbet.lan/api/v2/pagedata"})
 
 	cfg := config.Response{
 		RevalidateBeta:     0.5,
@@ -111,11 +107,11 @@ func BenchmarkWriteIntoStorage(b *testing.B) {
 
 	responses := make([]*model.Response, b.N)
 	for i := 0; i < b.N; i++ {
-		req := model.NewRequest("285", "1xbet.com", "en", `{"name": "betting", "choice": null}`+strconv.Itoa(i))
+		req := model.NewRequest("285", "1xbet.com", "en", `{"name": "betting", "choice": {"name": "betting_live", "choice": {"name": "betting_live_null", "choice": {"name": "betting_live_null_`+strconv.Itoa(i)+`", "choice": null}}}}`)
 		resp, err := model.NewResponse(
-			cfg, http.Header{}, req, 200, []byte(`{"data": "success"}`),
+			cfg, http.Header{}, req, 200, bts,
 			func() (statusCode int, body []byte, headers http.Header, err error) {
-				return seoRepo.PageData(ctx, req)
+				return 200, bts, http.Header{"Content-Type": []string{"application/json"}}, nil
 			},
 		)
 		if err != nil {
