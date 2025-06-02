@@ -42,6 +42,18 @@ type Datum struct {
 	body       []byte // raw body of response
 }
 
+func (d *Datum) Headers() http.Header {
+	return d.headers
+}
+
+func (d *Datum) StatusCode() int {
+	return d.statusCode
+}
+
+func (d *Datum) Body() []byte {
+	return d.body
+}
+
 func NewResponse(
 	headers http.Header,
 	statusCode int,
