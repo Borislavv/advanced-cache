@@ -9,6 +9,7 @@ import (
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
 	"github.com/rs/zerolog/log"
+	"hash/maphash"
 	"math"
 	"runtime"
 	"sync"
@@ -44,6 +45,8 @@ type LRUAlgo struct {
 	// list from newest to oldest
 	shardedOrderedList [sharded.ShardCount]*OrderedList
 
+	hasherPool *sync.Pool
+
 	evictedCh chan int
 }
 
@@ -52,8 +55,13 @@ func NewLRU(cfg config.Config) *LRUAlgo {
 		cfg:               cfg,
 		shardedMap:        sharded.NewMap[uint64, *model.Response](cfg.InitStorageLengthPerShard),
 		evictionThreshold: uintptr(math.Round(cfg.MemoryLimit * cfg.MemoryFillThreshold)),
-		activeEvictors:    &atomic.Int32{},
 		evictedCh:         make(chan int, maxEvictors),
+		activeEvictors:    &atomic.Int32{},
+		hasherPool: &sync.Pool{
+			New: func() interface{} {
+				return &maphash.Hash{}
+			},
+		},
 	}
 
 	for i := 0; i < sharded.ShardCount; i++ {
@@ -81,7 +89,10 @@ func (c *LRUAlgo) logStatInfo(ctx context.Context) {
 }
 
 func (c *LRUAlgo) Get(ctx context.Context, req *model.Request, fn model.ResponseCreator) (resp *model.Response, isHit bool, err error) {
-	key := req.UniqueKey()
+	h := c.hasherPool.Get().(*maphash.Hash)
+	defer c.hasherPool.Put(h)
+
+	key := req.UniqueKey(h)
 	shardKey := c.shardedMap.GetShardKey(key)
 
 	resp, found := c.shardedMap.Get(key, shardKey)
@@ -114,7 +125,10 @@ func (c *LRUAlgo) computeResponse(ctx context.Context, req *model.Request, fn mo
 }
 
 func (c *LRUAlgo) set(ctx context.Context, resp *model.Response) {
-	key := resp.GetRequest().UniqueKey()
+	h := c.hasherPool.Get().(*maphash.Hash)
+	defer c.hasherPool.Put(h)
+
+	key := resp.GetRequest().UniqueKey(h)
 	shardKey := c.shardedMap.GetShardKey(key)
 
 	if c.isEvictionNecessaryAndAvailable() {
@@ -126,7 +140,9 @@ func (c *LRUAlgo) set(ctx context.Context, resp *model.Response) {
 }
 
 func (c *LRUAlgo) Del(req *model.Request) {
-	c.shardedMap.Del(req.UniqueKey())
+	h := c.hasherPool.Get().(*maphash.Hash)
+	defer c.hasherPool.Put(h)
+	c.shardedMap.Del(req.UniqueKey(h))
 }
 
 func (c *LRUAlgo) isEvictionNecessaryAndAvailable() bool {
@@ -159,13 +175,16 @@ func (c *LRUAlgo) evictBatch(ctx context.Context, shardKey uint, num int) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	h := c.hasherPool.Get().(*maphash.Hash)
+	defer c.hasherPool.Put(h)
+
 	for {
 		select {
 		case <-ctx.Done():
 			return evictionsNum
 		default:
 			if back := s.Back(); evictionsNum < num && back != nil {
-				c.shardedMap.Del(back.Value.(*model.Request).UniqueKey())
+				c.shardedMap.Del(back.Value.(*model.Request).UniqueKey(h))
 				s.Remove(back)
 				evictionsNum++
 			} else {
