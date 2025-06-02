@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"sync"
 	"time"
-	"unsafe"
 
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/buger/jsonparser"
@@ -183,8 +182,54 @@ func (r *Response) GetHeaders() http.Header {
 	return r.headers
 }
 func (r *Response) Size() uintptr {
-	return unsafe.Sizeof(*r)
+	var size int
+
+	// === Datum ===
+	if r.Datum != nil {
+		// headers
+		for key, values := range r.Datum.headers {
+			size += len(key)
+			for _, val := range values {
+				size += len(val)
+			}
+		}
+		// body
+		size += len(r.Datum.body)
+		// statusCode: 4 bytes (int)
+		size += 4
+	}
+
+	// === Request ===
+	if r.request != nil {
+		size += len(r.request.project)
+		size += len(r.request.domain)
+		size += len(r.request.language)
+		size += len(r.request.choice)
+		size += len(r.request.uniqueString)
+		size += len(r.request.uniqueQuery)
+		// uniqueKey: 8 bytes (uint64)
+		size += 8
+	}
+
+	// === Response ===
+
+	// tags slice (array of strings)
+	for _, tag := range r.tags {
+		size += len(tag)
+	}
+
+	// Timestamps: 2 x time.Time (assume 15 bytes each = 30 bytes total)
+	size += 15 * 2
+
+	// Floats (revalidateBeta): 8 bytes
+	size += 8
+
+	// Durations: 8 bytes
+	size += 8
+
+	return uintptr(size)
 }
+
 func ExtractTags(choice string) ([]string, error) {
 	names := make([]string, 0, 7)
 

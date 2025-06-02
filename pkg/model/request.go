@@ -1,9 +1,8 @@
 package model
 
 import (
+	"hash/maphash"
 	"sync"
-
-	"github.com/zeebo/xxh3"
 )
 
 type Request struct {
@@ -53,11 +52,16 @@ func (r *Request) String() string {
 	defer r.mu.Unlock()
 	return r.strUnlocked()
 }
-func (r *Request) UniqueKey() uint64 {
+func hashKey(key string, hasher *maphash.Hash) uint64 {
+	hasher.Reset()
+	_, _ = hasher.WriteString(key)
+	return hasher.Sum64()
+}
+func (r *Request) UniqueKey(hasher *maphash.Hash) uint64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.uniqueKey == 0 {
-		r.uniqueKey = xxh3.HashString(r.strUnlocked())
+		r.uniqueKey = hashKey(r.strUnlocked(), hasher)
 	}
 	return r.uniqueKey
 }
