@@ -14,9 +14,7 @@ import (
 )
 
 const (
-	maxEvictors           = 5
-	maxEvictionsPreIter   = 10
-	maxEvictionIterations = 10
+	maxEvictors = 64
 )
 
 type OrderedList struct {
