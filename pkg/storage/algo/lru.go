@@ -166,6 +166,5 @@ func (c *LRUAlgo) pushToFront(shardKey uint, req *model.Request) *list.Element {
 	s := c.shardedOrderedList[shardKey]
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	el := s.PushFront(req)
-	return el
+	return s.PushFront(req)
 }

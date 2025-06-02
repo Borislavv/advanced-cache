@@ -1,9 +1,9 @@
 package model
 
 import (
-	"github.com/rs/zerolog/log"
-	"github.com/zeebo/xxh3"
 	"sync"
+
+	"github.com/zeebo/xxh3"
 )
 
 type Request struct {
@@ -75,7 +75,6 @@ func (r *Request) ToQuery() (string, error) {
 	tags, err := ExtractTags(r.choice)
 	if err != nil {
 		r.mu.RUnlock()
-		log.Err(err).Msg("failed to parse tags")
 		return "", err
 	}
 	r.mu.RUnlock()
