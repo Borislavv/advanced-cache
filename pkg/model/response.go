@@ -4,7 +4,6 @@ import (
 	"container/list"
 	"fmt"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/repository"
 	"github.com/buger/jsonparser"
 	"github.com/rs/zerolog/log"
 	"math"
@@ -23,7 +22,6 @@ type Response struct {
 	*Datum
 	mu            *sync.RWMutex
 	cfg           config.Response
-	seoRepo       repository.Seo
 	request       *Request // request for current response
 	tags          []string // choice names as tags
 	listElement   *list.Element
@@ -42,6 +40,7 @@ func NewResponse(
 	cfg config.Response,
 	headers http.Header,
 	req *Request,
+	statusCode int,
 	body []byte,
 	revalidator ResponseCreator,
 ) (*Response, error) {
@@ -56,15 +55,23 @@ func NewResponse(
 		tags:        tags,
 		revalidator: revalidator,
 		Datum: &Datum{
-			headers: headers,
-			body:    body,
+			headers:    headers,
+			statusCode: statusCode,
+			body:       body,
 		},
 		revalidatedAt: time.Now(),
 		createdAt:     time.Now(),
 	}, nil
 }
 func (r *Response) Revalidate() {
-	defer log.Info().Msg("success revalidated")
+	var err error
+	defer func() {
+		if err == nil {
+			log.Info().Msg("success revalidated")
+		} else {
+			log.Error().Err(err).Msg("fail to revalidate")
+		}
+	}()
 
 	r.mu.RLock()
 	revalidator := r.revalidator
@@ -72,7 +79,6 @@ func (r *Response) Revalidate() {
 
 	code, bytes, headers, err := revalidator()
 	if err != nil {
-		log.Warn().Err(err).Msg("revalidator failed")
 		return
 	}
 
@@ -135,9 +141,9 @@ func (r *Response) GetDatum() *Datum {
 	return r.Datum
 }
 
-func (r *Response) SetDatum(meta *Datum) {
+func (r *Response) SetDatum(datum *Datum) {
 	r.mu.Lock()
-	r.Datum = meta
+	r.Datum = datum
 	r.mu.Unlock()
 }
 func (r *Response) GetBody() []byte {
