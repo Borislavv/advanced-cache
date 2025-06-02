@@ -148,13 +148,10 @@ func (c *LRUAlgo) evictBatch(ctx context.Context, shardKey uint, num int) int {
 }
 
 func (c *LRUAlgo) recordHit(shardKey uint, resp *model.Response) {
-	resp.Touch()
-	el := resp.GetListElement()
-	c.moveToFront(shardKey, el)
+	c.moveToFront(shardKey, resp.GetListElement())
 }
 
 func (c *LRUAlgo) recordPush(shardKey uint, resp *model.Response) {
-	resp.Touch()
 	resp.SetListElement(c.pushToFront(shardKey, resp.GetRequest()))
 }
 
