@@ -4,7 +4,6 @@ import (
 	"container/list"
 	"fmt"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/repository"
 	"github.com/buger/jsonparser"
 	"github.com/rs/zerolog/log"
 	"math"
@@ -21,7 +20,6 @@ type Response struct {
 	*Datum
 	mu            *sync.RWMutex
 	cfg           config.Response
-	seoRepo       repository.Seo
 	request       *Request // request for current response
 	tags          []string // choice names as tags
 	listElement   *list.Element

@@ -4,7 +4,6 @@ import (
 	"context"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/repository"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/algo"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -34,22 +33,24 @@ func BenchmarkReadFromStorage(b *testing.B) {
 		MemoryLimit:               1024 * 1024 * 128,
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := context.Background()
 
-	seoRepo := repository.NewSeo()
+	//seoRepo := repository.NewSeo(config.Repository{SeoUrl: "https://seo-master.lux.kube.xbet.lan/api/v2/pagedata"})
 
 	cfg := config.Response{
 		RevalidateBeta:     0.5,
-		RevalidateInterval: time.Minute * 1,
+		RevalidateInterval: time.Minute * 15,
 	}
 
 	requests := make([]*model.Request, 0, b.N)
 	for i := 0; i < b.N; i++ {
-		req := model.NewRequest("285", "1xbet.com", "en", `{"name": "betting", "choice": null}`+strconv.Itoa(i))
-		resp, err := model.NewResponse(cfg, http.Header{}, req, []byte(`{"data": "success"}`), func() ([]byte, error) {
-			return seoRepo.PageData()
-		})
+		req := model.NewRequest("285", "1xbet.com", "en", `{"name": "betting", "choice": {"name": "betting_live", "choice": {"name": "betting_live_null", "choice": {"name": "betting_live_null_`+strconv.Itoa(i)+`", "choice": null}}}}`)
+		resp, err := model.NewResponse(
+			cfg, http.Header{}, req, []byte(`{"data": "success"}`),
+			func() (body []byte, err error) {
+				return []byte("{'success': 'true', 'data': null, 'err': 'none'}"), nil
+			},
+		)
 		if err != nil {
 			panic(err)
 		}
@@ -65,7 +66,7 @@ func BenchmarkReadFromStorage(b *testing.B) {
 		t := time.Duration(0)
 		for pb.Next() {
 			tc := time.Now()
-			s.Get(requests[i%b.N])
+			_, _ = s.Get(requests[i%b.N])
 			t += time.Since(tc)
 			i++
 		}
@@ -93,10 +94,9 @@ func BenchmarkWriteIntoStorage(b *testing.B) {
 		MemoryLimit:               1024 * 1024 * 128,
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := context.Background()
 
-	seoRepo := repository.NewSeo()
+	//seoRepo := repository.NewSeo(config.Repository{SeoUrl: "https://seo-master.lux.kube.xbet.lan/api/v2/pagedata"})
 
 	cfg := config.Response{
 		RevalidateBeta:     0.5,
@@ -106,9 +106,12 @@ func BenchmarkWriteIntoStorage(b *testing.B) {
 	responses := make([]*model.Response, b.N)
 	for i := 0; i < b.N; i++ {
 		req := model.NewRequest("285", "1xbet.com", "en", `{"name": "betting", "choice": null}`+strconv.Itoa(i))
-		resp, err := model.NewResponse(cfg, http.Header{}, req, []byte(`{"data": "success"}`), func() ([]byte, error) {
-			return seoRepo.PageData()
-		})
+		resp, err := model.NewResponse(
+			cfg, http.Header{}, req, []byte(`{"data": "success"}`),
+			func() (body []byte, err error) {
+				return []byte("{'success': 'true', 'data': null, 'err': 'none'}"), nil
+			},
+		)
 		if err != nil {
 			panic(err)
 		}
