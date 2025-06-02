@@ -30,3 +30,10 @@ func FmtMem(bytes uintptr) string {
 		return fmt.Sprintf("%dB", bytes)
 	}
 }
+
+func BoolToString(val bool) string {
+	if val {
+		return "true"
+	}
+	return "false"
+}

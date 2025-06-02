@@ -3,11 +3,12 @@ package repository
 import (
 	"context"
 	"errors"
+	"net/http"
+
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
-	"net/http"
-	"strconv"
+	"github.com/rs/zerolog/log"
 )
 
 type Seo interface {
@@ -27,28 +28,31 @@ func NewSeo(cfg config.Repository) *SeoRepository {
 func (s *SeoRepository) PageData(ctx context.Context, req *model.Request) (statusCode int, body []byte, headers http.Header, err error) {
 	query, err := req.ToQuery()
 	if err != nil {
-		return http.StatusServiceUnavailable, nil, nil, errors.New("failed to build query: " + err.Error())
+		log.Err(err).Msg("failed to build query")
+		return 0, nil, nil, err
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, s.cfg.SeoUrl+query, nil)
 	if err != nil {
-		return http.StatusServiceUnavailable, nil, nil, errors.New("failed to build request: " + err.Error())
+		log.Err(err).Msg("failed to build request")
+		return 0, nil, nil, err
 	}
 
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
-		return http.StatusServiceUnavailable, nil, nil, errors.New("failed to fetch pagedata: " + err.Error())
+		log.Err(err).Msg("failed to fetch pagedata")
+		return 0, nil, nil, err
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return resp.StatusCode, nil, nil,
-			errors.New("not 200 status code (actual: " + strconv.Itoa(resp.StatusCode) + ") received from pagedata")
+		return resp.StatusCode, nil, nil, errors.New("not 200 status code received from pagedata")
 	}
 
 	body, err = utils.ReadResponseBody(resp)
 	if err != nil {
-		return resp.StatusCode, nil, nil, errors.New("failed to read response body: " + err.Error())
+		log.Err(err).Msg("failed to read response body")
+		return resp.StatusCode, nil, nil, err
 	}
 
 	return resp.StatusCode, body, resp.Header, nil

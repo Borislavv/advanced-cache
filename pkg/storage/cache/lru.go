@@ -1,21 +1,20 @@
-package algo
+package cache
 
 import (
 	"container/list"
 	"context"
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
-	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
-	"github.com/rs/zerolog/log"
+	"errors"
 	"math"
 	"sync"
 	"sync/atomic"
-	"time"
+
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
+	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
 )
 
 const (
-	maxEvictors = 64
+	maxEvictors = 5
 )
 
 type OrderedList struct {
@@ -35,7 +34,7 @@ func (l *OrderedList) Size() uintptr {
 }
 
 type LRUAlgo struct {
-	cfg config.Storage
+	cfg config.Config
 
 	shardedMap        *sharded.Map[uint64, *model.Response]
 	activeEvictors    *atomic.Int32
@@ -47,7 +46,7 @@ type LRUAlgo struct {
 	evictsCh chan int
 }
 
-func NewLRU(ctx context.Context, cfg config.Storage) *LRUAlgo {
+func NewLRU(cfg config.Config) *LRUAlgo {
 	lru := &LRUAlgo{
 		cfg:               cfg,
 		shardedMap:        sharded.NewMap[uint64, *model.Response](cfg.InitStorageLengthPerShard),
@@ -65,51 +64,42 @@ func NewLRU(ctx context.Context, cfg config.Storage) *LRUAlgo {
 	return lru
 }
 
-func (c *LRUAlgo) debugInfoLogger(ctx context.Context) {
-	evictedPerSec := 0
-	t := utils.NewTicker(ctx, time.Second*5)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t:
-			log.Info().Msgf(
-				"LRU: evicted %d at the last second, now memory usage: %s, storage lenth: %d.",
-				evictedPerSec, utils.FmtMem(c.shardedMap.Mem()), c.shardedMap.Len(),
-			)
-		case evictedPerIter := <-c.evictsCh:
-			evictedPerSec += evictedPerIter
-		}
-	}
-}
-
-func (c *LRUAlgo) Get(req *model.Request) (resp *model.Response, found bool) {
+func (c *LRUAlgo) Get(ctx context.Context, req *model.Request, fn model.ResponseCreator) (resp *model.Response, isHit bool, err error) {
 	key := req.UniqueKey()
 	shardKey := c.shardedMap.GetShardKey(key)
 
-	resp, found = c.shardedMap.Get(key, shardKey)
+	resp, found := c.shardedMap.Get(key, shardKey)
 	if !found {
-		return nil, false
+		resp, err = c.computeResponse(ctx, req, fn)
+		if err != nil {
+			return nil, false, errors.New("failed to compute response: " + err.Error())
+		}
+		c.set(ctx, resp)
+		return resp, false, nil
 	}
+
 	c.recordHit(shardKey, resp)
-
 	if resp.ShouldBeRevalidated() {
-		go resp.Revalidate()
+		go resp.Revalidate(ctx)
 	}
 
-	return resp, true
+	return resp, true, nil
 }
 
-func (c *LRUAlgo) Set(ctx context.Context, resp *model.Response) {
+func (c *LRUAlgo) computeResponse(ctx context.Context, req *model.Request, fn model.ResponseCreator) (*model.Response, error) {
+	statusCode, data, header, err := fn(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return model.NewResponse(
+		header, statusCode, req, data, fn,
+		c.cfg.RevalidateInterval, c.cfg.RevalidateBeta,
+	)
+}
+
+func (c *LRUAlgo) set(ctx context.Context, resp *model.Response) {
 	key := resp.GetRequest().UniqueKey()
 	shardKey := c.shardedMap.GetShardKey(key)
-
-	r, found := c.shardedMap.Get(key, shardKey)
-	if found {
-		c.recordHit(shardKey, r)
-		r.SetDatum(resp.GetDatum())
-		return
-	}
 
 	if c.isEvictionNecessaryAndAvailable() {
 		go c.evict(ctx, shardKey)

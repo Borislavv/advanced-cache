@@ -1,8 +1,9 @@
 package model
 
 import (
-	"github.com/zeebo/xxh3"
 	"sync"
+
+	"github.com/zeebo/xxh3"
 )
 
 type Request struct {

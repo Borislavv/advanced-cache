@@ -8,6 +8,7 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/repository"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
 	"github.com/joho/godotenv"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
@@ -18,8 +19,7 @@ import (
 var internalServerErrorJson = []byte(`{"error": {"message": "Internal server error."}}`)
 
 type Config struct {
-	config.Storage
-	config.Response
+	config.Config `mapstructure:",squash"`
 }
 
 func CreateConfig() *Config {
@@ -49,12 +49,15 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) ht
 		next:    next,
 		name:    name,
 		config:  config,
-		seoRepo: repository.NewSeo(),
-		storage: storage.New(config.Storage),
+		seoRepo: repository.NewSeo(config.Repository),
+		storage: storage.New(config.Config),
 	}
 }
 
 func (p *Plugin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(p.ctx, time.Second*3)
+	defer cancel()
+
 	req, err := p.extractRequest(r)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -64,37 +67,15 @@ func (p *Plugin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if resp, found := p.storage.Get(req); found {
-		w.WriteHeader(http.StatusOK)
-		if _, werr := w.Write(resp.GetBody()); werr != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			log.Err(werr).Msg("error while writing response into http.ResponseWriter")
-			return
-		}
-		for headerName, v := range resp.GetHeaders() {
-			for _, headerValue := range v {
-				w.Header().Add(headerName, headerValue)
-			}
-		}
-		return
+	creator := func(ctx context.Context, req *model.Request) (int, []byte, http.Header, error) {
+		clonedWriter := newCaptureResponseWriter(w)
+		p.next.ServeHTTP(clonedWriter, r)
+		return clonedWriter.statusCode, clonedWriter.body.Bytes(), clonedWriter.Header(), nil
 	}
 
-	clonedWriter := newCaptureResponseWriter(w)
-
-	p.next.ServeHTTP(clonedWriter, r)
-
-	if clonedWriter.statusCode != http.StatusOK {
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(p.ctx, time.Millisecond*400)
-	defer cancel()
-
-	resp, err := model.NewResponse(p.config.Response, clonedWriter.Header().Clone(), req, clonedWriter.body.Bytes(), func() ([]byte, error) {
-		return p.seoRepo.PageData()
-	})
+	resp, isHit, err := p.storage.Get(ctx, req, creator)
 	if err != nil {
-		log.Err(err).Msg("failed to make response")
+		log.Err(err).Msg("error while fetching from storage")
 		w.WriteHeader(http.StatusInternalServerError)
 		if _, werr := w.Write(internalServerErrorJson); werr != nil {
 			log.Err(werr).Msg("error while writing response into http.ResponseWriter")
@@ -102,7 +83,28 @@ func (p *Plugin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	p.storage.Set(ctx, resp)
+	w.WriteHeader(p.chooseStatusCode(resp.StatusCode()))
+	w.Header().Add("X-From-Http-Cache-Proxy", "true")
+	w.Header().Add("X-Hit-Http-Cache-Proxy", utils.BoolToString(isHit))
+	if _, werr := w.Write(resp.GetBody()); werr != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		log.Err(werr).Msg("error while writing response into http.ResponseWriter")
+		return
+	}
+	for headerName, v := range resp.GetHeaders() {
+		for _, headerValue := range v {
+			w.Header().Add(headerName, headerValue)
+		}
+	}
+	return
+}
+
+func (p *Plugin) chooseStatusCode(statusCode int) int {
+	if statusCode > 0 {
+		return statusCode
+	} else {
+		return http.StatusInternalServerError
+	}
 }
 
 func (p *Plugin) extractRequest(r *http.Request) (*model.Request, error) {
