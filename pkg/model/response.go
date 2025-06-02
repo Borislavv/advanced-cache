@@ -23,18 +23,17 @@ const (
 
 type ResponseCreator func(ctx context.Context, req *Request) (statusCode int, body []byte, headers http.Header, err error)
 
-type ResponseCreator = func() (statusCode int, body []byte, headers http.Header, err error)
-
 type Response struct {
 	*Datum
-	mu            *sync.RWMutex
-	cfg           config.Response
-	request       *Request // request for current response
-	tags          []string // choice names as tags
-	listElement   *list.Element
-	revalidatedAt time.Time // last revalidated timestamp
-	revalidator   ResponseCreator
-	createdAt     time.Time
+	mu                 *sync.RWMutex
+	cfg                config.Response
+	request            *Request // request for current response
+	tags               []string // choice names as tags
+	listElement        *list.Element
+	creator            ResponseCreator
+	revalidateInterval time.Duration
+	revalidatedAt      time.Time // last revalidated timestamp
+	revalidateBeta     float64
 }
 
 type Datum struct {
@@ -47,7 +46,6 @@ func NewResponse(
 	headers http.Header,
 	statusCode int,
 	req *Request,
-	statusCode int,
 	body []byte,
 	creator ResponseCreator,
 	revalidateInterval time.Duration,
@@ -70,7 +68,6 @@ func NewResponse(
 		revalidateInterval: revalidateInterval,
 		revalidateBeta:     revalidateBeta,
 		revalidatedAt:      time.Now(),
-		createdAt:          time.Now(),
 	}, nil
 }
 func (r *Response) Revalidate(ctx context.Context) {
@@ -86,10 +83,10 @@ func (r *Response) Revalidate(ctx context.Context) {
 
 	r.mu.RLock()
 	req := r.request
-	revalidator := r.creator
+	creator := r.creator
 	r.mu.RUnlock()
 
-	code, bytes, headers, err := revalidator()
+	statusCode, bytes, headers, err := creator(ctx, req)
 	if err != nil {
 		return
 	}
