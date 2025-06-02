@@ -84,7 +84,8 @@ func (p *Plugin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Add("X-From-Http-Cache-Proxy", utils.BoolToString(found))
+	w.Header().Add("X-From-Http-Cache-Proxy", "true")
+	w.Header().Add("X-Hit-Http-Cache-Proxy", utils.BoolToString(found))
 	if _, werr := w.Write(body); werr != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Err(werr).Msg("error while writing response into http.ResponseWriter")
