@@ -9,7 +9,6 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
-	"gitlab.xbet.lan/v3group/backend/packages/go/logger/pkg/logger"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -58,10 +57,8 @@ func main() {
 	defer cancel()
 
 	cfg := &config.Config{}
-	if err := viper.Unmarshal(cfg); err != nil {
-		logger.ErrorMsg(ctx, "failed to unmarshal config", logger.Fields{
-			"err": err.Error(),
-		})
+	if err = viper.Unmarshal(cfg); err != nil {
+		log.Err(err).Msg("failed to unmarshal config")
 		return
 	}
 
@@ -70,7 +67,7 @@ func main() {
 
 	osSigsCh := make(chan os.Signal, 1)
 	signal.Notify(osSigsCh, os.Interrupt, syscall.SIGTERM)
-	defer logger.InfoMsg(context.Background(), "gracefully stopped", nil)
+	defer log.Info().Msg("gracefully stopped")
 
 	i := 0
 	for {

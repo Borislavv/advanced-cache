@@ -75,6 +75,7 @@ func (r *Response) Revalidate(ctx context.Context) {
 		if err != nil {
 			log.Debug().Msg("revalidation failed")
 		} else {
+			//log.Debug().Msg("success revalidated")
 			log.Debug().Msg("success revalidated")
 		}
 	}()

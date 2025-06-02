@@ -7,7 +7,6 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
-	"gitlab.xbet.lan/v3group/backend/packages/go/logger/pkg/logger"
 	"net/http"
 	"strconv"
 	"testing"
@@ -32,7 +31,7 @@ func BenchmarkReadFromStorage(b *testing.B) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	logger.InfoMsgf(ctx, nil, "["+strconv.Itoa(BenchmarkReadFromStorageNum)+"] Started BenchmarkReadFromStorage benchmark with "+strconv.Itoa(b.N)+" iterations.")
+	log.Info().Msgf("[" + strconv.Itoa(BenchmarkReadFromStorageNum) + "] Started BenchmarkReadFromStorage benchmark with " + strconv.Itoa(b.N) + " iterations.")
 	BenchmarkReadFromStorageNum++
 
 	cfg := config.Config{
