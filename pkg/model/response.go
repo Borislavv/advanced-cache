@@ -132,24 +132,17 @@ func (r *Response) ShouldBeRevalidated() bool {
 	return r.shouldRevalidateBeta(revalidatedAt, revalidatedInterval, beta)
 }
 func (r *Response) shouldRevalidateBeta(revalidatedAt time.Time, revalidateInterval time.Duration, beta float64) bool {
-	now := time.Now()
-	age := now.Sub(revalidatedAt)
+	age := time.Since(revalidatedAt)
 
-	if revalidatedAt.Add(time.Duration(math.Ceil(float64(revalidateInterval) * beta))).After(time.Now()) {
-		// not yet
+	if age < time.Duration(beta*float64(revalidateInterval)) {
 		return false
 	}
 
 	if age >= revalidateInterval {
-		// properly expired, must be revalidated
 		return true
 	}
 
-	// chance of prevent refresh
-	probability := math.Exp(-beta * float64(age) / float64(revalidateInterval))
-	rnd := rand.Float64() // [0.0, 1.0]
-
-	return rnd >= probability
+	return rand.Float64() >= math.Exp(-beta*float64(age)/float64(revalidateInterval))
 }
 
 func (r *Response) GetRequest() *Request {
