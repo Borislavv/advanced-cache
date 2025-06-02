@@ -5,6 +5,7 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	"github.com/joho/godotenv"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
 	"gitlab.xbet.lan/v3group/backend/packages/go/logger/pkg/logger"
 	"net/http"
@@ -56,7 +57,7 @@ func BenchmarkReadFromStorage(b *testing.B) {
 	requests := make([]*model.Request, 0, b.N)
 	for i := 0; i < b.N; i++ {
 		req := model.NewRequest("285", "1xbet.com", "en", `{"name": "betting", "choice": null}`)
-		_, _ = db.Get(ctx, req, func(ctx context.Context, req *model.Request) (statusCode int, body []byte, headers http.Header, err error) {
+		_, _, _ = db.Get(ctx, req, func(ctx context.Context, req *model.Request) (statusCode int, body []byte, headers http.Header, err error) {
 			return 200, []byte(`{"data": {"success": true}}`), http.Header{}, nil
 		})
 		requests = append(requests, req)
@@ -84,19 +85,15 @@ func BenchmarkReadFromStorage(b *testing.B) {
 		for pb.Next() {
 			tc := time.Now()
 			req := requests[i%b.N]
-			_, _ = db.Get(ctx, req, func(ctx context.Context, req *model.Request) (statusCode int, body []byte, headers http.Header, err error) {
+			_, hit, err := db.Get(ctx, req, func(ctx context.Context, req *model.Request) (statusCode int, body []byte, headers http.Header, err error) {
 				return 200, []byte(`{"data": {"success": true}}`), http.Header{}, nil
 			})
-			//logger.InfoMsgf(ctx, nil, "req to: %s", req.String())
-			//if err != nil {
-			//	logger.ErrorMsg(ctx, "failed to fetch", logger.Fields{
-			//		"err": err.Error(),
-			//	})
-			//	panic(err)
-			//}
-			//if !found {
-			//	logger.ErrorMsg(ctx, "not found in cache", nil)
-			//}
+			if err != nil {
+				panic(err)
+			}
+			if !hit {
+				log.Info().Msg("request was not found in storage")
+			}
 			t += time.Since(tc)
 			i++
 		}

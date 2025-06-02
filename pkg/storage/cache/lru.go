@@ -60,7 +60,7 @@ func NewLRU(cfg config.Config) *LRUAlgo {
 	return lru
 }
 
-func (c *LRUAlgo) Get(ctx context.Context, req *model.Request, fn model.ResponseCreator) (resp *model.Response, err error) {
+func (c *LRUAlgo) Get(ctx context.Context, req *model.Request, fn model.ResponseCreator) (resp *model.Response, isHit bool, err error) {
 	key := req.UniqueKey()
 	shardKey := c.shardedMap.GetShardKey(key)
 
@@ -68,10 +68,10 @@ func (c *LRUAlgo) Get(ctx context.Context, req *model.Request, fn model.Response
 	if !found {
 		resp, err = c.computeResponse(ctx, req, fn)
 		if err != nil {
-			return nil, errors.New("failed to compute response: " + err.Error())
+			return nil, false, errors.New("failed to compute response: " + err.Error())
 		}
 		c.set(ctx, resp)
-		return resp, nil
+		return resp, false, nil
 	}
 
 	c.recordHit(shardKey, resp)
@@ -79,7 +79,7 @@ func (c *LRUAlgo) Get(ctx context.Context, req *model.Request, fn model.Response
 		go resp.Revalidate(ctx)
 	}
 
-	return resp, nil
+	return resp, true, nil
 }
 
 func (c *LRUAlgo) computeResponse(ctx context.Context, req *model.Request, fn model.ResponseCreator) (*model.Response, error) {

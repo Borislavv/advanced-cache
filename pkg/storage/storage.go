@@ -9,7 +9,7 @@ import (
 
 type Storage interface {
 	// Get - returns the same slice headers as stored in origin *model.Response! Don't mutate it, just copy if you need some more than read.
-	Get(ctx context.Context, req *model.Request, fn model.ResponseCreator) (resp *model.Response, err error)
+	Get(ctx context.Context, req *model.Request, fn model.ResponseCreator) (resp *model.Response, isHit bool, err error)
 	Del(req *model.Request)
 }
 
