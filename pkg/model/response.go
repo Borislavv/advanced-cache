@@ -171,11 +171,6 @@ func (r *Response) GetHeaders() http.Header {
 	defer r.mu.RUnlock()
 	return r.headers
 }
-func (r *Response) Get() (statusCode int, body []byte, headers http.Header) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.statusCode, r.body, r.headers
-}
 func (r *Response) Size() uintptr {
 	return unsafe.Sizeof(*r)
 }

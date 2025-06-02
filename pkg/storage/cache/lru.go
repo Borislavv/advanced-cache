@@ -3,13 +3,13 @@ package cache
 import (
 	"container/list"
 	"context"
+	"errors"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
 	"github.com/rs/zerolog/log"
 	"math"
-	"net/http"
 	"sync"
 	"sync/atomic"
 )
@@ -60,32 +60,26 @@ func NewLRU(cfg config.Config) *LRUAlgo {
 	return lru
 }
 
-func (c *LRUAlgo) Get(
-	ctx context.Context, req *model.Request, fn model.ResponseCreator,
-) (
-	statusCode int, body []byte, headers http.Header, found bool, err error,
-) {
+func (c *LRUAlgo) Get(ctx context.Context, req *model.Request, fn model.ResponseCreator) (resp *model.Response, err error) {
 	key := req.UniqueKey()
 	shardKey := c.shardedMap.GetShardKey(key)
 
-	resp, ok := c.shardedMap.Get(key, shardKey)
-	if !ok {
+	resp, found := c.shardedMap.Get(key, shardKey)
+	if !found {
 		resp, err = c.computeResponse(ctx, req, fn)
 		if err != nil {
-			log.Error().Err(err).Msg("failed to compute response")
-			return http.StatusInternalServerError, nil, nil, false, err
+			return nil, errors.New("failed to compute response: " + err.Error())
 		}
 		c.set(ctx, resp)
-		statusCode, body, headers = resp.Get()
-		return statusCode, body, headers, false, nil
+		return resp, nil
 	}
 
 	c.recordHit(shardKey, resp)
 	if resp.ShouldBeRevalidated() {
 		go resp.Revalidate(ctx)
 	}
-	statusCode, body, headers = resp.Get()
-	return statusCode, body, headers, true, nil
+
+	return resp, nil
 }
 
 func (c *LRUAlgo) computeResponse(ctx context.Context, req *model.Request, fn model.ResponseCreator) (*model.Response, error) {
