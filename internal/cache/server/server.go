@@ -28,9 +28,8 @@ type Http interface {
 }
 
 type HttpServer struct {
-	ctx          context.Context
-	cancel       context.CancelFunc
-	serverCancel context.CancelFunc
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	cfg           *config.Config
 	metrics       *metrics.Metrics
@@ -89,7 +88,6 @@ func (s *HttpServer) Start() {
 }
 
 func (s *HttpServer) stop() {
-	s.serverCancel()
 	s.cancel()
 }
 

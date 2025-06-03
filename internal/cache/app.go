@@ -25,11 +25,14 @@ type Cache struct {
 }
 
 func NewApp(ctx context.Context, cfg *config.Config, probe liveness.Prober) (*Cache, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	_ = cancel
+
 	cacheCfg := &cfg.Config
 	if srv, err := server.New(ctx, cfg, storage.New(ctx, cacheCfg), repository.NewSeo(cacheCfg)); err != nil {
 		return nil, err
 	} else {
-		return &Cache{ctx: ctx, cfg: cfg, probe: probe, server: srv}, nil
+		return &Cache{ctx: ctx, cancel: cancel, cfg: cfg, probe: probe, server: srv}, nil
 	}
 }
 
