@@ -21,11 +21,13 @@ var nameRegexp = regexp.MustCompile(`"name"\s*:\s*"([^"]*)"`)
 type ResponseCreator func(ctx context.Context, req *Request) (statusCode int, body []byte, headers http.Header, err error)
 
 type Response struct {
-	*Datum
 	mu                 *sync.RWMutex
-	cfg                config.Response
+	cfg                config.Config
 	request            *Request // request for current response
 	tags               []string // choice names as tags
+	headers            http.Header
+	statusCode         int
+	body               []byte // raw body of response
 	listElement        *list.Element
 	creator            ResponseCreator
 	revalidateInterval time.Duration
@@ -33,22 +35,10 @@ type Response struct {
 	revalidateBeta     float64
 }
 
-type Datum struct {
-	headers    http.Header
-	statusCode int
-	body       []byte // raw body of response
-}
-
-func (d *Datum) Headers() http.Header {
-	return d.headers
-}
-
-func (d *Datum) StatusCode() int {
-	return d.statusCode
-}
-
-func (d *Datum) Body() []byte {
-	return d.body
+func (r *Response) StatusCode() int {
+	r.mu.RUnlock()
+	defer r.mu.RUnlock()
+	return r.statusCode
 }
 
 func NewResponse(
@@ -65,14 +55,12 @@ func NewResponse(
 		return nil, fmt.Errorf("cannot extract tags from choice: %s", err.Error())
 	}
 	return &Response{
-		mu:      &sync.RWMutex{},
-		request: req,
-		tags:    tags,
-		Datum: &Datum{
-			statusCode: statusCode,
-			headers:    headers,
-			body:       body,
-		},
+		mu:                 &sync.RWMutex{},
+		request:            req,
+		tags:               tags,
+		statusCode:         statusCode,
+		headers:            headers,
+		body:               body,
 		creator:            creator,
 		revalidateInterval: revalidateInterval,
 		revalidateBeta:     revalidateBeta,
@@ -157,18 +145,6 @@ func (r *Response) SetListElement(el *list.Element) {
 	defer r.mu.Unlock()
 	r.listElement = el
 }
-
-func (r *Response) GetDatum() *Datum {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.Datum
-}
-
-func (r *Response) SetDatum(datum *Datum) {
-	r.mu.Lock()
-	r.Datum = datum
-	r.mu.Unlock()
-}
 func (r *Response) GetBody() []byte {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -180,22 +156,23 @@ func (r *Response) GetHeaders() http.Header {
 	return r.headers
 }
 func (r *Response) Size() uintptr {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	var size int
 
-	// === Datum ===
-	if r.Datum != nil {
-		// headers
-		for key, values := range r.Datum.headers {
-			size += len(key)
-			for _, val := range values {
-				size += len(val)
-			}
+	// === http.Response data ===
+	// headers
+	for key, values := range r.headers {
+		size += len(key)
+		for _, val := range values {
+			size += len(val)
 		}
-		// body
-		size += len(r.Datum.body)
-		// statusCode: 4 bytes (int)
-		size += 4
 	}
+	// body
+	size += len(r.body)
+	// statusCode: 4 bytes (int)
+	size += 4
 
 	// === Request ===
 	if r.request != nil {
