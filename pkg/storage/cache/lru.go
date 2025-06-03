@@ -5,16 +5,18 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strconv"
 	"sync"
 	"sync/atomic"
 
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
+	"github.com/rs/zerolog/log"
 )
 
 const (
-	maxEvictors = 5
+	maxEvictors = 12
 )
 
 type OrderedList struct {
@@ -29,12 +31,8 @@ func NewOrderedList() *OrderedList {
 	}
 }
 
-func (l *OrderedList) Size() uintptr {
-	return 0
-}
-
 type LRUAlgo struct {
-	cfg config.Config
+	cfg *config.Config
 
 	shardedMap        *sharded.Map[uint64, *model.Response]
 	activeEvictors    *atomic.Int32
@@ -42,29 +40,24 @@ type LRUAlgo struct {
 
 	// list from newest to oldest
 	shardedOrderedList [sharded.ShardCount]*OrderedList
-
-	evictsCh chan int
 }
 
-func NewLRU(cfg config.Config) *LRUAlgo {
+func NewLRU(ctx context.Context, cfg *config.Config) *LRUAlgo {
 	lru := &LRUAlgo{
 		cfg:               cfg,
 		shardedMap:        sharded.NewMap[uint64, *model.Response](cfg.InitStorageLengthPerShard),
 		evictionThreshold: uintptr(math.Round(cfg.MemoryLimit * cfg.MemoryFillThreshold)),
 		activeEvictors:    &atomic.Int32{},
-		evictsCh:          make(chan int, maxEvictors),
 	}
 
 	for i := 0; i < sharded.ShardCount; i++ {
 		lru.shardedOrderedList[i] = NewOrderedList()
 	}
 
-	go lru.debugInfoLogger(ctx)
-
 	return lru
 }
 
-func (c *LRUAlgo) Get(ctx context.Context, req *model.Request, fn model.ResponseCreator) (resp *model.Response, isHit bool, err error) {
+func (c *LRUAlgo) Get(ctx context.Context, req *model.Request) (resp *model.Response, found bool) {
 	key := req.UniqueKey()
 	shardKey := c.shardedMap.GetShardKey(key)
 
@@ -101,6 +94,13 @@ func (c *LRUAlgo) set(ctx context.Context, resp *model.Response) {
 	key := resp.GetRequest().UniqueKey()
 	shardKey := c.shardedMap.GetShardKey(key)
 
+	r, found := c.shardedMap.Get(key, shardKey)
+	if found {
+		c.recordHit(shardKey, r)
+		r.SetData(resp.GetData())
+		return
+	}
+
 	if c.isEvictionNecessaryAndAvailable() {
 		go c.evict(ctx, shardKey)
 	}
@@ -121,29 +121,40 @@ func (c *LRUAlgo) evict(ctx context.Context, key uint) {
 	c.activeEvictors.Add(1)
 	defer c.activeEvictors.Add(-1)
 
-	if needEvictMemory := int(c.shardedMap.Mem() - c.evictionThreshold); needEvictMemory > 0 {
-		weighPerItem := int(c.shardedMap.Mem()) / int(c.shardedMap.Len())
-		numberOfItemsForEviction := needEvictMemory/weighPerItem + 1
-		evicted := c.evictBatch(ctx, key, numberOfItemsForEviction)
-		c.evictedCh <- evicted
+	mem := int(c.shardedMap.Mem())
+	length := int(c.shardedMap.Len())
+
+	needEvictMemory := mem - int(c.evictionThreshold)
+	if needEvictMemory <= 0 || length == 0 {
+		return
 	}
+
+	weighPerItem := mem / length
+	if weighPerItem == 0 {
+		weighPerItem = 1
+	}
+
+	evicted := c.evictBatch(ctx, key, (needEvictMemory/weighPerItem)+1)
+
+	log.Debug().Msg("evicted " + strconv.Itoa(evicted) + " items (mem: " +
+		strconv.Itoa(int(c.shardedMap.Mem())) + " bytes, len: " + strconv.Itoa(int(c.shardedMap.Len())) + ")")
 }
 
 func (c *LRUAlgo) evictBatch(ctx context.Context, shardKey uint, num int) int {
 	var evictionsNum int
 
-	s := c.shardedOrderedList[shardKey]
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	shard := c.shardedOrderedList[shardKey]
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return evictionsNum
 		default:
-			if back := s.Back(); evictionsNum < num && back != nil {
+			if back := shard.Back(); evictionsNum < num && back != nil {
 				c.shardedMap.Del(back.Value.(*model.Request).UniqueKey())
-				s.Remove(back)
+				shard.Remove(back)
 				evictionsNum++
 			} else {
 				return evictionsNum
@@ -161,15 +172,15 @@ func (c *LRUAlgo) recordPush(shardKey uint, resp *model.Response) {
 }
 
 func (c *LRUAlgo) moveToFront(shardKey uint, el *list.Element) {
-	s := c.shardedOrderedList[shardKey]
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.MoveToFront(el)
+	shard := c.shardedOrderedList[shardKey]
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+	shard.MoveToFront(el)
 }
 
 func (c *LRUAlgo) pushToFront(shardKey uint, req *model.Request) *list.Element {
-	s := c.shardedOrderedList[shardKey]
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.PushFront(req)
+	shard := c.shardedOrderedList[shardKey]
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+	return shard.PushFront(req)
 }

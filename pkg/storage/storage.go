@@ -9,8 +9,8 @@ import (
 )
 
 type Storage interface {
-	// Get - returns the same slice headers as stored in origin *model.Response! Don't mutate it, just copy if you need some more than read.
-	Get(ctx context.Context, req *model.Request, fn model.ResponseCreator) (resp *model.Response, isHit bool, err error)
+	Get(ctx context.Context, req *model.Request) (resp *model.Response, found bool)
+	Set(ctx context.Context, resp *model.Response)
 	Del(req *model.Request)
 }
 
@@ -18,7 +18,7 @@ type AlgoStorage struct {
 	Storage
 }
 
-func New(ctx context.Context, cfg config.Config) *AlgoStorage {
+func New(ctx context.Context, cfg *config.Config) *AlgoStorage {
 	var s Storage
 	switch cache.Algorithm(cfg.EvictionAlgo) {
 	case cache.LRU:
