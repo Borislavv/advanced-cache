@@ -3,11 +3,11 @@ package storage
 import (
 	"context"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/mock"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/cache"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"net/http"
+	"math/rand/v2"
 	"os"
 	"strconv"
 	"testing"
@@ -23,7 +23,8 @@ func init() {
 var BenchmarkReadFromStorageNum int
 
 func BenchmarkReadFromStorage(b *testing.B) {
-	log.Info().Msg("[" + strconv.Itoa(BenchmarkReadFromStorageNum) + "] Started BenchmarkReadFromStorage benchmark with " + strconv.Itoa(b.N) + " iterations.")
+	log.Info().Msg("[" + strconv.Itoa(BenchmarkReadFromStorageNum) +
+		"] Started BenchmarkReadFromStorage benchmark with " + strconv.Itoa(b.N) + " iterations.")
 	BenchmarkReadFromStorageNum++
 
 	ctx := context.Background()
@@ -40,30 +41,22 @@ func BenchmarkReadFromStorage(b *testing.B) {
 
 	db := New(ctx, cfg)
 
-	requests := make([]*model.Request, 0, b.N)
-	for i := 0; i < b.N; i++ {
-		req := model.NewRequest("285", "1xbet.com", "en", `{"name": "node_`+strconv.Itoa(i)+`", "choice": null}`)
-		resp, err := model.NewResponse(
-			model.NewData(200, http.Header{}, []byte(`{"data": "success"}`)),
-			req,
-			cfg,
-			func(ctx context.Context) (data *model.Data, err error) {
-				return model.NewData(200, http.Header{}, []byte(`{"data": "success"}`)), nil
-			},
-		)
-		if err != nil {
-			panic(err)
-		}
-		resp.Revalidate(ctx)
-		db.Set(ctx, resp)
-		requests = append(requests, req)
+	length := b.N
+	if length > 10_000_000 {
+		length = 10_000_000
 	}
+
+	responses := mock.GenerateRandomResponses(cfg, rand.IntN(length+1))
+	for _, resp := range responses {
+		db.Set(ctx, resp)
+	}
+	length = len(responses)
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			_, _ = db.Get(ctx, requests[i%b.N])
+			_, _ = db.Get(ctx, responses[i%length].GetRequest())
 			i++
 		}
 	})
