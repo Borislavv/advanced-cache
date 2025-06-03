@@ -4,34 +4,45 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/cache"
 	"net/http"
 	"time"
 
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
+	cfg "github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/repository"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
-	"github.com/joho/godotenv"
-	"github.com/spf13/viper"
 )
 
 var internalServerErrorJson = []byte(`{"error": {"message": "Internal server error."}}`)
 
 type Config struct {
-	config.Config `mapstructure:",squash"`
+	SeoUrl string `mapstructure:"SEO_URL"`
+	// RevalidateBeta is a value which will be used for generate
+	// random time point for refresh response (must be from 0.1 to 0.9).
+	// Don't use absolute values like 0 and 1 due it will be leading to CPU peaks usage.
+	//  - beta = 0.5 — regular, good for start value
+	//  - beta = 1.0 — aggressive refreshing
+	//  - beta = 0.0 — disables refreshing
+	RevalidateBeta            float64       `mapstructure:"REVALIDATE_BETA"`
+	RevalidateInterval        time.Duration `mapstructure:"REVALIDATE_INTERVAL"`
+	InitStorageLengthPerShard int           `mapstructure:"INIT_STORAGE_LEN_PER_SHARD"`
+	EvictionAlgo              string        `mapstructure:"EVICTION_ALGO"`
+	MemoryFillThreshold       float64       `mapstructure:"MEMORY_FILL_THRESHOLD"`
+	MemoryLimit               float64       `mapstructure:"MEMORY_LIMIT"`
 }
 
 func CreateConfig() *Config {
-	if err := godotenv.Load(); err != nil {
-		// log.Err(err).Msg(".env file not found, skipping")
+	return &Config{
+		InitStorageLengthPerShard: 256,
+		EvictionAlgo:              string(cache.LRU),
+		MemoryFillThreshold:       0.97,
+		MemoryLimit:               1024 * 1024 * 256,
+		RevalidateBeta:            0.4,
+		RevalidateInterval:        time.Minute * 30,
+		SeoUrl:                    "https://seo-master.lux.kube.xbet.lan/api/v2/pagedata",
 	}
-	viper.AutomaticEnv()
-	cfg := &Config{}
-	if err := viper.Unmarshal(cfg); err != nil {
-		// log.Err(err).Msg("failed to unmarshal config")
-	}
-	return cfg
 }
 
 type Plugin struct {
@@ -49,12 +60,28 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) ht
 		next:    next,
 		name:    name,
 		config:  config,
-		seoRepo: repository.NewSeo(config.Repository),
-		storage: storage.New(ctx, config.Config),
+		seoRepo: repository.NewSeo(config),
+		storage: storage.New(ctx, cfg.Config{
+			SeoUrl:                    config.SeoUrl,
+			RevalidateBeta:            config.RevalidateBeta,
+			RevalidateInterval:        config.RevalidateInterval,
+			InitStorageLengthPerShard: config.InitStorageLengthPerShard,
+			EvictionAlgo:              config.EvictionAlgo,
+			MemoryFillThreshold:       config.MemoryFillThreshold,
+			MemoryLimit:               config.MemoryLimit,
+		}),
 	}
 }
 
 func (p *Plugin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if p.next == nil {
+		return
+	}
+
+	if w == nil {
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(p.ctx, time.Second*3)
 	defer cancel()
 

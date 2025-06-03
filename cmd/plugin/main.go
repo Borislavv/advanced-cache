@@ -63,7 +63,7 @@ func main() {
 	}
 
 	db := storage.New(ctx, *cfg)
-	seoRepo := repository.NewSeo(cfg.Repository)
+	seoRepo := repository.NewSeo(cfg)
 
 	osSigsCh := make(chan os.Signal, 1)
 	signal.Notify(osSigsCh, os.Interrupt, syscall.SIGTERM)

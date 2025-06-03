@@ -8,23 +8,7 @@ import (
 
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
-	"github.com/joho/godotenv"
-	"github.com/spf13/viper"
 )
-
-var bts = []byte("{success: true}")
-
-func init() {
-	_ = godotenv.Load()
-	viper.AutomaticEnv()
-	_ = viper.BindEnv("INIT_STORAGE_LEN_PER_SHARD")
-	_ = viper.BindEnv("EVICTION_ALGO")
-	_ = viper.BindEnv("MEMORY_FILL_THRESHOLD")
-	_ = viper.BindEnv("MEMORY_LIMIT")
-	_ = viper.BindEnv("REVALIDATE_BETA")
-	_ = viper.BindEnv("REVALIDATE_INTERVAL")
-	_ = viper.BindEnv("SEO_URL")
-}
 
 var BenchmarkReadFromStorageNum int
 
@@ -36,19 +20,13 @@ func BenchmarkReadFromStorage(b *testing.B) {
 	BenchmarkReadFromStorageNum++
 
 	cfg := config.Config{
-		Storage: config.Storage{
-			InitStorageLengthPerShard: 256,
-			EvictionAlgo:              "LRU",
-			MemoryFillThreshold:       0.95,
-			MemoryLimit:               1024 * 1024 * 12,
-		},
-		Response: config.Response{
-			RevalidateBeta:     0.5,
-			RevalidateInterval: time.Minute * 120,
-		},
-		Repository: config.Repository{
-			SeoUrl: "https://seo-master.lux.kube.xbet.lan/api/v2/pagedata",
-		},
+		InitStorageLengthPerShard: 256,
+		EvictionAlgo:              "LRU",
+		MemoryFillThreshold:       0.95,
+		MemoryLimit:               1024 * 1024 * 12,
+		RevalidateBeta:            0.5,
+		RevalidateInterval:        time.Minute * 120,
+		SeoUrl:                    "https://seo-master.lux.kube.xbet.lan/api/v2/pagedata",
 	}
 
 	db := New(ctx, cfg)
