@@ -4,21 +4,18 @@ import (
 	"container/list"
 	"context"
 	"errors"
-	"hash/maphash"
 	"math"
-	"runtime"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
-	"github.com/rs/zerolog/log"
 )
 
-var maxEvictors = int32(runtime.GOMAXPROCS(0))
+const (
+	maxEvictors = 5
+)
 
 type OrderedList struct {
 	mu *sync.Mutex
@@ -46,23 +43,16 @@ type LRUAlgo struct {
 	// list from newest to oldest
 	shardedOrderedList [sharded.ShardCount]*OrderedList
 
-	hasherPool *sync.Pool
-
-	evictedCh chan int
+	evictsCh chan int
 }
 
-func NewLRU(ctx context.Context, cfg config.Config) *LRUAlgo {
+func NewLRU(cfg config.Config) *LRUAlgo {
 	lru := &LRUAlgo{
 		cfg:               cfg,
 		shardedMap:        sharded.NewMap[uint64, *model.Response](cfg.InitStorageLengthPerShard),
 		evictionThreshold: uintptr(math.Round(cfg.MemoryLimit * cfg.MemoryFillThreshold)),
-		evictedCh:         make(chan int, maxEvictors),
 		activeEvictors:    &atomic.Int32{},
-		hasherPool: &sync.Pool{
-			New: func() interface{} {
-				return &maphash.Hash{}
-			},
-		},
+		evictsCh:          make(chan int, maxEvictors),
 	}
 
 	for i := 0; i < sharded.ShardCount; i++ {
@@ -74,28 +64,8 @@ func NewLRU(ctx context.Context, cfg config.Config) *LRUAlgo {
 	return lru
 }
 
-func (c *LRUAlgo) debugInfoLogger(ctx context.Context) {
-	evicted := 0
-	ticker := utils.NewTicker(ctx, time.Second*5)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker:
-			log.Info().Msgf("[CACHE] LRU: evicted %d keys at the last 5 seconds. "+
-				"Memory usage: %s, storage length: %d.", evicted, utils.FmtMemory(c.shardedMap.Mem()), c.shardedMap.Len())
-			evicted = 0
-		case evictedPerIter := <-c.evictedCh:
-			evicted += evictedPerIter
-		}
-	}
-}
-
 func (c *LRUAlgo) Get(ctx context.Context, req *model.Request, fn model.ResponseCreator) (resp *model.Response, isHit bool, err error) {
-	h := c.hasherPool.Get().(*maphash.Hash)
-	defer c.hasherPool.Put(h)
-
-	key := req.UniqueKey(h)
+	key := req.UniqueKey()
 	shardKey := c.shardedMap.GetShardKey(key)
 
 	resp, found := c.shardedMap.Get(key, shardKey)
@@ -128,10 +98,7 @@ func (c *LRUAlgo) computeResponse(ctx context.Context, req *model.Request, fn mo
 }
 
 func (c *LRUAlgo) set(ctx context.Context, resp *model.Response) {
-	h := c.hasherPool.Get().(*maphash.Hash)
-	defer c.hasherPool.Put(h)
-
-	key := resp.GetRequest().UniqueKey(h)
+	key := resp.GetRequest().UniqueKey()
 	shardKey := c.shardedMap.GetShardKey(key)
 
 	if c.isEvictionNecessaryAndAvailable() {
@@ -143,9 +110,7 @@ func (c *LRUAlgo) set(ctx context.Context, resp *model.Response) {
 }
 
 func (c *LRUAlgo) Del(req *model.Request) {
-	h := c.hasherPool.Get().(*maphash.Hash)
-	defer c.hasherPool.Put(h)
-	c.shardedMap.Del(req.UniqueKey(h))
+	c.shardedMap.Del(req.UniqueKey())
 }
 
 func (c *LRUAlgo) isEvictionNecessaryAndAvailable() bool {
@@ -171,16 +136,13 @@ func (c *LRUAlgo) evictBatch(ctx context.Context, shardKey uint, num int) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	h := c.hasherPool.Get().(*maphash.Hash)
-	defer c.hasherPool.Put(h)
-
 	for {
 		select {
 		case <-ctx.Done():
 			return evictionsNum
 		default:
 			if back := s.Back(); evictionsNum < num && back != nil {
-				c.shardedMap.Del(back.Value.(*model.Request).UniqueKey(h))
+				c.shardedMap.Del(back.Value.(*model.Request).UniqueKey())
 				s.Remove(back)
 				evictionsNum++
 			} else {
