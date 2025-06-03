@@ -43,8 +43,6 @@ type LRUAlgo struct {
 
 	// list from newest to oldest
 	shardedOrderedList [sharded.ShardCount]*OrderedList
-
-	evictsCh chan int
 }
 
 func NewLRU(ctx context.Context, cfg config.Storage) *LRUAlgo {
@@ -53,14 +51,11 @@ func NewLRU(ctx context.Context, cfg config.Storage) *LRUAlgo {
 		shardedMap:        sharded.NewMap[uint64, *model.Response](cfg.InitStorageLengthPerShard),
 		evictionThreshold: uintptr(math.Round(cfg.MemoryLimit * cfg.MemoryFillThreshold)),
 		activeEvictors:    &atomic.Int32{},
-		evictsCh:          make(chan int, maxEvictors),
 	}
 
 	for i := 0; i < sharded.ShardCount; i++ {
 		lru.shardedOrderedList[i] = NewOrderedList()
 	}
-
-	go lru.debugInfoLogger(ctx)
 
 	return lru
 }

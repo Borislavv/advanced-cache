@@ -3,15 +3,16 @@ package model
 import (
 	"container/list"
 	"fmt"
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
-	"github.com/buger/jsonparser"
-	"github.com/rs/zerolog/log"
 	"math"
 	"math/rand"
 	"net/http"
 	"sync"
 	"time"
 	"unsafe"
+
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
+	"github.com/buger/jsonparser"
+	"github.com/rs/zerolog/log"
 )
 
 const nameToken = "name"
@@ -19,21 +20,34 @@ const nameToken = "name"
 type ResponseCreator = func() (statusCode int, body []byte, headers http.Header, err error)
 
 type Response struct {
-	*Datum
-	mu            *sync.RWMutex
-	cfg           config.Response
-	request       *Request // request for current response
-	tags          []string // choice names as tags
-	listElement   *list.Element
-	revalidatedAt time.Time // last revalidated timestamp
-	revalidator   ResponseCreator
-	createdAt     time.Time
+	*Data
+	mu                 *sync.RWMutex
+	cfg                config.Response
+	request            *Request // request for current response
+	tags               []string // choice names as tags
+	listElement        *list.Element
+	creator            ResponseCreator
+	revalidateInterval time.Duration
+	revalidatedAt      time.Time // last revalidated timestamp
+	revalidateBeta     float64
 }
 
-type Datum struct {
+type Data struct {
 	headers    http.Header
 	statusCode int
 	body       []byte // raw body of response
+}
+
+func (d *Data) Headers() http.Header {
+	return d.headers
+}
+
+func (d *Data) StatusCode() int {
+	return d.statusCode
+}
+
+func (d *Data) Body() []byte {
+	return d.body
 }
 
 func NewResponse(
@@ -49,18 +63,15 @@ func NewResponse(
 		return nil, fmt.Errorf("cannot extract tags from choice: %s", err.Error())
 	}
 	return &Response{
-		mu:          &sync.RWMutex{},
-		cfg:         cfg,
-		request:     req,
-		tags:        tags,
-		revalidator: revalidator,
-		Datum: &Datum{
-			headers:    headers,
+		mu:      &sync.RWMutex{},
+		request: req,
+		tags:    tags,
+		Data: &Data{
 			statusCode: statusCode,
+			headers:    headers,
 			body:       body,
 		},
 		revalidatedAt: time.Now(),
-		createdAt:     time.Now(),
 	}, nil
 }
 func (r *Response) Revalidate() {
@@ -74,10 +85,10 @@ func (r *Response) Revalidate() {
 	}()
 
 	r.mu.RLock()
-	revalidator := r.revalidator
+	creator := r.creator
 	r.mu.RUnlock()
 
-	code, bytes, headers, err := revalidator()
+	code, bytes, headers, err := creator()
 	if err != nil {
 		return
 	}
@@ -135,15 +146,15 @@ func (r *Response) SetListElement(el *list.Element) {
 	r.listElement = el
 }
 
-func (r *Response) GetDatum() *Datum {
+func (r *Response) GetData() *Data {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.Datum
+	return r.Data
 }
 
-func (r *Response) SetDatum(datum *Datum) {
+func (r *Response) SetData(data *Data) {
 	r.mu.Lock()
-	r.Datum = datum
+	r.Data = data
 	r.mu.Unlock()
 }
 func (r *Response) GetBody() []byte {
