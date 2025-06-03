@@ -7,6 +7,7 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/repository"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage"
 	"github.com/rs/zerolog/log"
+	"gitlab.xbet.lan/v3group/backend/packages/go/graceful-shutdown/pkg/shutdown"
 	"gitlab.xbet.lan/v3group/backend/packages/go/liveness-prober"
 	"sync"
 )
@@ -36,8 +37,11 @@ func NewApp(ctx context.Context, cfg *config.Config, probe liveness.Prober) (*Ca
 	}
 }
 
-func (c *Cache) Start() {
-	defer c.stop()
+func (c *Cache) Start(gc shutdown.Gracefuller) {
+	defer func() {
+		c.stop()
+		gc.Done()
+	}()
 
 	log.Info().Msg("starting cache app")
 

@@ -7,9 +7,11 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
+	"gitlab.xbet.lan/v3group/backend/packages/go/graceful-shutdown/pkg/shutdown"
 	"gitlab.xbet.lan/v3group/backend/packages/go/liveness-prober"
 	"go.uber.org/automaxprocs/maxprocs"
 	"runtime"
+	"time"
 )
 
 func init() {
@@ -53,11 +55,18 @@ func main() {
 
 	setMaxProcs()
 	cfg := loadCfg()
+	gc := shutdown.NewGraceful(ctx, cancel)
+	gc.SetGracefulTimeout(time.Second * 10)
 	probe := liveness.NewProbe(cfg.LivenessProbeTimeout)
 
 	if app, err := cache.NewApp(ctx, cfg, probe); err != nil {
 		log.Err(err).Msg("failed init. cache app")
 	} else {
-		app.Start()
+		gc.Add(1)
+		go app.Start(gc)
+	}
+
+	if err := gc.ListenCancelAndAwait(); err != nil {
+		log.Err(err).Msg("failed to gracefully shut down service")
 	}
 }

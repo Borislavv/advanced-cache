@@ -13,7 +13,6 @@ import (
 	"github.com/valyala/fasthttp"
 	util "gitlab.xbet.lan/v3group/backend/packages/go/httpserver/pkg/httpserver/util"
 	"net/http"
-	"time"
 )
 
 const CacheGetPath = "/api/v1/cache/pagedata"
@@ -54,8 +53,6 @@ func NewCacheController(
 }
 
 func (c *CacheController) Index(r *fasthttp.RequestCtx) {
-	from := time.Now()
-
 	ctx, err := util.ExtractCtx(r)
 	if err != nil {
 		ctx = c.ctx
@@ -91,8 +88,6 @@ func (c *CacheController) Index(r *fasthttp.RequestCtx) {
 		c.respondThatServiceIsTemporaryUnavailable(err, r)
 		return
 	}
-
-	log.Debug().Msg("request has been processed in " + time.Since(from).String())
 }
 
 func (c *CacheController) respondThatServiceIsTemporaryUnavailable(err error, ctx *fasthttp.RequestCtx) {

@@ -3,7 +3,6 @@ module github.com/Borislavv/traefik-http-cache-plugin
 go 1.23.2
 
 require (
-	github.com/buger/jsonparser v1.1.1
 	github.com/fasthttp/router v1.5.4
 	github.com/joho/godotenv v1.5.1
 	github.com/rs/zerolog v1.34.0
@@ -43,6 +42,7 @@ require (
 	github.com/spf13/pflag v1.0.6 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
+	gitlab.xbet.lan/v3group/backend/packages/go/graceful-shutdown v1.1.0 // indirect
 	gitlab.xbet.lan/v3group/backend/packages/go/logger v1.0.0 // indirect
 	go.uber.org/atomic v1.9.0 // indirect
 	go.uber.org/multierr v1.9.0 // indirect
