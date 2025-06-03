@@ -141,13 +141,18 @@ func (r *Request) ToQuery() []byte {
 	buf = append(buf, []byte("&language=")...)
 	buf = append(buf, r.language...)
 
+	var n int
 	var choiceArrBytes = []byte("[choice]")
-	for n, tag := range r.tags {
+	for _, tag := range r.tags {
 		buf = append(buf, []byte("&choice")...)
 		buf = append(buf, bytes.Repeat(choiceArrBytes, n)...)
 		buf = append(buf, []byte("[name]=")...)
 		buf = append(buf, tag...)
+		n++
 	}
+	buf = append(buf, []byte("&choice")...)
+	buf = append(buf, bytes.Repeat(choiceArrBytes, n)...)
+	buf = append(buf, []byte("=null")...)
 
 	r.mu.Lock()
 	r.uniqueQuery = buf
