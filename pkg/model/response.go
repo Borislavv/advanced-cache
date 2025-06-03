@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"context"
 	"fmt"
+	"github.com/rs/zerolog/log"
 	"math"
 	"math/rand"
 	"net/http"
@@ -11,16 +12,11 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/rs/zerolog/log"
-
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/buger/jsonparser"
 )
 
-const (
-	nameToken      = "name"
-	aggressiveBeta = 0.9 // aggressive revalidation (probably may be upped to 0.95 or 0.98-0.99)
-)
+const nameToken = "name"
 
 type ResponseCreator = func(ctx context.Context) (data *Data, err error)
 
