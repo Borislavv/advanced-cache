@@ -8,7 +8,6 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage"
 	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
-	"log"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -78,15 +77,44 @@ func main() {
 			return
 		default:
 			req := model.NewRequest("285", "1x001.com", "en", `{"name": "betting", "choice": null}`+strconv.Itoa(i))
-			_, _, err = db.Get(ctx, req, seoRepo.PageData)
-			if err != nil {
-				log.Println(err.Error())
-				continue
-			}
+			getData(ctx, db, seoRepo, req)
 			if i%69 == 0 {
 				runtime.Gosched()
 			}
 			i++
 		}
 	}
+}
+
+func getData(ctx context.Context, db storage.Storage, seoRepo repository.Seo, req *model.Request) {
+	_, _, err := db.Get(ctx, req, seoRepo.PageData)
+	if err != nil {
+		//// log.Err(err).Msg("failed to get body")
+		return
+	}
+
+	_, _, err = db.Get(ctx, req, seoRepo.PageData)
+	if err != nil {
+		// log.Err(err).Msg("failed to get body")
+		return
+	}
+
+	_, _, err = db.Get(ctx, req, seoRepo.PageData)
+	if err != nil {
+		// log.Err(err).Msg("failed to get body")
+		return
+	}
+
+	_, _, err = db.Get(ctx, req, seoRepo.PageData)
+	if err != nil {
+		// log.Err(err).Msg("failed to get body")
+		return
+	}
+
+	_, _, err = db.Get(ctx, req, seoRepo.PageData)
+	if err != nil {
+		// log.Err(err).Msg("failed to get body")
+		return
+	}
+	//fmt.Println(string(data))
 }
