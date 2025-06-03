@@ -7,17 +7,18 @@ import (
 	"math"
 	"math/rand"
 	"net/http"
-	"regexp"
 	"sync"
 	"time"
 
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
+	"github.com/buger/jsonparser"
 	"github.com/rs/zerolog/log"
 )
 
-const aggressiveBeta = 0.9 // aggressive revalidation (probably may be upped to 0.95 or 0.98-0.99)
-
-var nameRegexp = regexp.MustCompile(`"name"\s*:\s*"([^"]*)"`)
+const (
+	nameToken      = "name"
+	aggressiveBeta = 0.9 // aggressive revalidation (probably may be upped to 0.95 or 0.98-0.99)
+)
 
 type ResponseCreator func(ctx context.Context, req *Request) (statusCode int, body []byte, headers http.Header, err error)
 
@@ -230,14 +231,16 @@ func (r *Response) Size() uintptr {
 }
 
 func ExtractTags(choice string) ([]string, error) {
-	matches := nameRegexp.FindAllStringSubmatch(choice, -1)
-	tags := make([]string, 0, len(matches))
+	names := make([]string, 0, 7)
 
-	for _, match := range matches {
-		if len(match) > 1 {
-			tags = append(tags, match[1])
+	if err := jsonparser.ObjectEach([]byte(choice), func(key []byte, value []byte, dataType jsonparser.ValueType, offset int) error {
+		if string(key) == nameToken {
+			names = append(names, string(value))
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
-	return tags, nil
+	return names, nil
 }
