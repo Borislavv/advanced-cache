@@ -2,185 +2,144 @@ package model
 
 import (
 	"container/list"
+	"context"
 	"fmt"
+	"github.com/rs/zerolog/log"
 	"math"
 	"math/rand"
 	"net/http"
-	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/buger/jsonparser"
-	"github.com/rs/zerolog/log"
 )
 
 const nameToken = "name"
 
-type ResponseCreator = func() (statusCode int, body []byte, headers http.Header, err error)
-
-type Response struct {
-	*Data
-	mu                 *sync.RWMutex
-	cfg                config.Response
-	request            *Request // request for current response
-	tags               []string // choice names as tags
-	listElement        *list.Element
-	creator            ResponseCreator
-	revalidateInterval time.Duration
-	revalidatedAt      time.Time // last revalidated timestamp
-	revalidateBeta     float64
-}
+type ResponseCreator = func(ctx context.Context) (data *Data, err error)
 
 type Data struct {
 	headers    http.Header
 	statusCode int
-	body       []byte // raw body of response
+	body       []byte
 }
 
-func (d *Data) Headers() http.Header {
-	return d.headers
+func NewData(statusCode int, headers http.Header, body []byte) *Data {
+	return &Data{
+		headers:    headers,
+		statusCode: statusCode,
+		body:       body,
+	}
 }
 
-func (d *Data) StatusCode() int {
-	return d.statusCode
-}
+func (d *Data) Headers() http.Header { return d.headers }
+func (d *Data) StatusCode() int      { return d.statusCode }
+func (d *Data) Body() []byte         { return d.body }
 
-func (d *Data) Body() []byte {
-	return d.body
+type Response struct {
+	/* mutable (pointer change but data are immutable) */
+	data atomic.Pointer[Data]
+	/* mutable (pointer change but data are immutable) */
+	request atomic.Pointer[Request]
+	/* mutable */
+	revalidatedAt atomic.Int64 // UnixNano
+	/* mutable */
+	listElement atomic.Pointer[list.Element]
+
+	/* immutable */
+	tags []string
+	/* immutable */
+	cfg *config.Config
+	/* immutable */
+	creator ResponseCreator
 }
 
 func NewResponse(
-	cfg config.Response,
-	headers http.Header,
+	data *Data,
 	req *Request,
-	statusCode int,
-	body []byte,
-	revalidator ResponseCreator,
+	cfg *config.Config,
+	creator ResponseCreator,
 ) (*Response, error) {
 	tags, err := ExtractTags(req.GetChoice())
 	if err != nil {
-		return nil, fmt.Errorf("cannot extract tags from choice: %s", err.Error())
+		return nil, fmt.Errorf("cannot extract tags from choice: %w", err)
 	}
-	return &Response{
-		mu:      &sync.RWMutex{},
-		request: req,
+	resp := &Response{
+		cfg:     cfg,
 		tags:    tags,
-		Data: &Data{
-			statusCode: statusCode,
-			headers:    headers,
-			body:       body,
-		},
-		revalidatedAt: time.Now(),
-	}, nil
+		creator: creator,
+	}
+	resp.data.Store(data)
+	resp.request.Store(req)
+	resp.revalidatedAt.Store(time.Now().UnixNano())
+	return resp, nil
 }
-func (r *Response) Revalidate() {
-	var err error
-	defer func() {
-		if err == nil {
-			log.Info().Msg("success revalidated")
-		} else {
-			log.Error().Err(err).Msg("fail to revalidate")
-		}
-	}()
 
-	r.mu.RLock()
-	creator := r.creator
-	r.mu.RUnlock()
-
-	code, bytes, headers, err := creator()
+func (r *Response) Revalidate(ctx context.Context) {
+	data, err := r.creator(ctx)
 	if err != nil {
+		log.Err(err).Msg("error occurred while revalidating item")
 		return
 	}
-
-	r.mu.Lock()
-	r.revalidatedAt = time.Now()
-	r.body = bytes
-	r.headers = headers
-	r.statusCode = code
-	r.mu.Unlock()
-	return
+	r.data.Store(data)
+	r.revalidatedAt.Store(time.Now().UnixNano())
 }
+
 func (r *Response) ShouldBeRevalidated() bool {
-	r.mu.RLock()
-	revalidatedAt := r.revalidatedAt
-	revalidatedInterval := r.cfg.RevalidateInterval
-	// beta = 0.5 — обычно хорошее стартовое значение
-	// beta = 1.0 — агрессивное обновление
-	// beta = 0.0 — отключает бета-обновление полностью
-	beta := r.cfg.RevalidateBeta
-	r.mu.RUnlock()
-
-	return r.shouldRevalidateBeta(revalidatedAt, revalidatedInterval, beta)
-}
-func (r *Response) shouldRevalidateBeta(revalidatedAt time.Time, revalidateInterval time.Duration, beta float64) bool {
-	now := time.Now()
-	age := now.Sub(revalidatedAt)
-
-	if age >= revalidateInterval {
-		// properly expired, must be revalidated
+	age := time.Since(time.Unix(0, r.revalidatedAt.Load()))
+	if age < time.Duration(float64(r.cfg.RevalidateInterval)*r.cfg.RevalidateBeta) {
+		return false
+	}
+	if age >= r.cfg.RevalidateInterval {
 		return true
 	}
-
-	// chance of prevent refresh
-	probability := math.Exp(-beta * float64(age) / float64(revalidateInterval))
-	rnd := rand.Float64() // [0.0, 1.0]
-
-	return rnd >= probability
+	return rand.Float64() >= math.Exp(-r.cfg.RevalidateBeta*float64(age)/float64(r.cfg.RevalidateInterval))
 }
 
 func (r *Response) GetRequest() *Request {
-	r.mu.RLock()
-	req := r.request
-	r.mu.RUnlock()
-	return req
+	return r.request.Load()
 }
+
 func (r *Response) GetListElement() *list.Element {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.listElement
+	return r.listElement.Load()
 }
+
 func (r *Response) SetListElement(el *list.Element) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.listElement = el
+	r.listElement.Store(el)
 }
 
 func (r *Response) GetData() *Data {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.Data
+	return r.data.Load()
 }
 
-func (r *Response) SetData(data *Data) {
-	r.mu.Lock()
-	r.Data = data
-	r.mu.Unlock()
+func (r *Response) SetData(d *Data) {
+	r.data.Store(d)
 }
+
 func (r *Response) GetBody() []byte {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.body
+	return r.data.Load().Body()
 }
+
 func (r *Response) GetHeaders() http.Header {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.headers
+	return r.data.Load().Headers()
 }
+
 func (r *Response) Size() uintptr {
 	return unsafe.Sizeof(*r)
 }
-func ExtractTags(choice string) ([]string, error) {
-	names := make([]string, 0, 7)
 
-	if err := jsonparser.ObjectEach([]byte(choice), func(key []byte, value []byte, dataType jsonparser.ValueType, offset int) error {
+func ExtractTags(choice string) ([]string, error) {
+	var names []string
+	err := jsonparser.ObjectEach([]byte(choice), func(key []byte, value []byte, dataType jsonparser.ValueType, offset int) error {
 		if string(key) == nameToken {
 			names = append(names, string(value))
 		}
 		return nil
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, err
 	}
-
 	return names, nil
 }

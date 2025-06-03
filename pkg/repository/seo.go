@@ -15,10 +15,10 @@ type Seo interface {
 }
 
 type SeoRepository struct {
-	cfg config.Repository
+	cfg *config.Config
 }
 
-func NewSeo(cfg config.Repository) *SeoRepository {
+func NewSeo(cfg *config.Config) *SeoRepository {
 	return &SeoRepository{
 		cfg: cfg,
 	}
