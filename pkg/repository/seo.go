@@ -3,12 +3,10 @@ package repository
 import (
 	"context"
 	"errors"
-	"net/http"
-	"strconv"
-
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
+	"net/http"
 )
 
 type Seo interface {
@@ -63,10 +61,6 @@ func (s *SeoRepository) requestPagedata(ctx context.Context, req *model.Request)
 		return nil, err
 	}
 	defer func() { _ = response.Body.Close() }()
-
-	if response.StatusCode != http.StatusOK {
-		return nil, errors.New("non-positive " + strconv.Itoa(response.StatusCode) + " status code received from pagedata")
-	}
 
 	body, err := utils.ReadResponseBody(response)
 	if err != nil {
