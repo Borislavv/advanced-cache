@@ -6,12 +6,11 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
 	"github.com/rs/zerolog/log"
 	"math"
+	"strconv"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 const (
@@ -39,8 +38,6 @@ type LRUAlgo struct {
 
 	// list from newest to oldest
 	shardedOrderedList [sharded.ShardCount]*OrderedList
-
-	evictsCh chan int
 }
 
 func NewLRU(ctx context.Context, cfg *config.Config) *LRUAlgo {
@@ -49,34 +46,13 @@ func NewLRU(ctx context.Context, cfg *config.Config) *LRUAlgo {
 		shardedMap:        sharded.NewMap[uint64, *model.Response](cfg.InitStorageLengthPerShard),
 		evictionThreshold: uintptr(math.Round(cfg.MemoryLimit * cfg.MemoryFillThreshold)),
 		activeEvictors:    &atomic.Int32{},
-		evictsCh:          make(chan int, maxEvictors),
 	}
 
 	for i := 0; i < sharded.ShardCount; i++ {
 		lru.shardedOrderedList[i] = NewOrderedList()
 	}
 
-	go lru.debugInfoLogger(ctx)
-
 	return lru
-}
-
-func (c *LRUAlgo) debugInfoLogger(ctx context.Context) {
-	evictedPerSec := 0
-	t := utils.NewTicker(ctx, time.Second*5)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t:
-			log.Info().Msgf(
-				"LRU: evicted %d at the last 5 seconds, memory usage: %s, storage lenth: %d.",
-				evictedPerSec, utils.FmtMem(c.shardedMap.Mem()), c.shardedMap.Len(),
-			)
-		case evictedPerIter := <-c.evictsCh:
-			evictedPerSec += evictedPerIter
-		}
-	}
 }
 
 func (c *LRUAlgo) Get(ctx context.Context, req *model.Request) (resp *model.Response, found bool) {
@@ -140,7 +116,10 @@ func (c *LRUAlgo) evict(ctx context.Context, key uint) {
 		weighPerItem = 1
 	}
 
-	c.evictsCh <- c.evictBatch(ctx, key, (needEvictMemory/weighPerItem)+1)
+	evicted := c.evictBatch(ctx, key, (needEvictMemory/weighPerItem)+1)
+
+	log.Debug().Msg("evicted " + strconv.Itoa(evicted) + " items (mem: " +
+		strconv.Itoa(int(c.shardedMap.Mem())) + " bytes, len: " + strconv.Itoa(int(c.shardedMap.Len())) + ")")
 }
 
 func (c *LRUAlgo) evictBatch(ctx context.Context, shardKey uint, num int) int {
