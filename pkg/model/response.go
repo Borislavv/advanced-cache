@@ -1,24 +1,25 @@
 package model
 
 import (
+	"bytes"
 	"container/list"
 	"context"
-	"fmt"
 	"github.com/rs/zerolog/log"
+	"github.com/valyala/fasthttp"
 	"math"
 	"math/rand"
 	"net/http"
+	"sort"
 	"sync/atomic"
 	"time"
 	"unsafe"
 
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
-	"github.com/buger/jsonparser"
 )
 
 const nameToken = "name"
 
-type ResponseCreator = func(ctx context.Context) (data *Data, err error)
+type ResponseRevalidator = func(ctx context.Context) (data *Data, err error)
 
 type Data struct {
 	headers    http.Header
@@ -49,27 +50,23 @@ type Response struct {
 	listElement atomic.Pointer[list.Element]
 
 	/* immutable */
-	tags []string
+	tags [][]byte
 	/* immutable */
 	cfg *config.Config
 	/* immutable */
-	creator ResponseCreator
+	revalidator ResponseRevalidator
 }
 
 func NewResponse(
 	data *Data,
 	req *Request,
 	cfg *config.Config,
-	creator ResponseCreator,
+	revalidator ResponseRevalidator,
 ) (*Response, error) {
-	tags, err := ExtractTags(req.GetChoice())
-	if err != nil {
-		return nil, fmt.Errorf("cannot extract tags from choice: %w", err)
-	}
 	resp := &Response{
-		cfg:     cfg,
-		tags:    tags,
-		creator: creator,
+		cfg:         cfg,
+		tags:        req.GetTags(),
+		revalidator: revalidator,
 	}
 	resp.data.Store(data)
 	resp.request.Store(req)
@@ -78,7 +75,7 @@ func NewResponse(
 }
 
 func (r *Response) Revalidate(ctx context.Context) {
-	data, err := r.creator(ctx)
+	data, err := r.revalidator(ctx)
 	if err != nil {
 		log.Err(err).Msg("error occurred while revalidating item")
 		return
@@ -126,20 +123,37 @@ func (r *Response) GetHeaders() http.Header {
 	return r.data.Load().Headers()
 }
 
+func (r *Response) GetRevalidatedAt() time.Time {
+	return time.Unix(0, r.revalidatedAt.Load())
+}
 func (r *Response) Size() uintptr {
 	return unsafe.Sizeof(*r)
 }
 
-func ExtractTags(choice string) ([]string, error) {
-	var names []string
-	err := jsonparser.ObjectEach([]byte(choice), func(key []byte, value []byte, dataType jsonparser.ValueType, offset int) error {
-		if string(key) == nameToken {
-			names = append(names, string(value))
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
+// ExtractTags - returns a slice with []byte("${choice name}").
+func ExtractTags(args *fasthttp.Args) [][]byte {
+	type entry struct {
+		depth int
+		value []byte
 	}
-	return names, nil
+
+	var entries []entry
+	args.VisitAll(func(key, value []byte) {
+		if !bytes.HasPrefix(key, choiceValue) || bytes.Equal(value, nullValue) {
+			return
+		}
+		depth := bytes.Count(key, arrChoiceValue)
+		entries = append(entries, entry{depth: depth, value: value})
+	})
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].depth < entries[j].depth
+	})
+
+	ordered := make([][]byte, 0, len(entries))
+	for _, entryItem := range entries {
+		ordered = append(ordered, entryItem.value)
+	}
+
+	return ordered
 }

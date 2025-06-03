@@ -3,16 +3,18 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
-	"github.com/rs/zerolog/log"
 )
 
 type Seo interface {
-	PageData(ctx context.Context, req *model.Request) (statusCode int, body []byte, headers http.Header, err error)
+	PageData(ctx context.Context, req *model.Request) (resp *model.Response, err error)
 }
 
 type SeoRepository struct {
@@ -25,35 +27,55 @@ func NewSeo(cfg *config.Config) *SeoRepository {
 	}
 }
 
-func (s *SeoRepository) PageData(ctx context.Context, req *model.Request) (statusCode int, body []byte, headers http.Header, err error) {
-	query, err := req.ToQuery()
+func (s *SeoRepository) PageData(ctx context.Context, req *model.Request) (resp *model.Response, err error) {
+	data, err := s.requestPagedata(ctx, req)
 	if err != nil {
-		log.Err(err).Msg("failed to build query")
-		return 0, nil, nil, err
+		return nil, errors.New("failed to request pagedata: " + err.Error())
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, s.cfg.SeoUrl+query, nil)
+	revalidator := func(ctx context.Context) (data *model.Data, err error) {
+		return s.requestPagedata(ctx, req)
+	}
+
+	resp, err = model.NewResponse(data, req, s.cfg, revalidator)
 	if err != nil {
-		log.Err(err).Msg("failed to build request")
-		return 0, nil, nil, err
+		return nil, errors.New("failed to create response: " + err.Error())
 	}
 
-	resp, err := http.DefaultClient.Do(httpReq)
+	return resp, nil
+}
+
+func (s *SeoRepository) requestPagedata(ctx context.Context, req *model.Request) (data *model.Data, err error) {
+	url := s.cfg.SeoUrl
+
+	query := req.ToQuery()
+	queryBuf := make([]byte, 0, len(url)+len(query))
+	for _, rn := range url {
+		queryBuf = append(queryBuf, byte(rn))
+	}
+	queryBuf = append(queryBuf, query...)
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, string(queryBuf), nil)
 	if err != nil {
-		log.Err(err).Msg("failed to fetch pagedata")
-		return 0, nil, nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return resp.StatusCode, nil, nil, errors.New("not 200 status code received from pagedata")
+		return nil, err
 	}
 
-	body, err = utils.ReadResponseBody(resp)
+	response, err := http.DefaultClient.Do(request)
 	if err != nil {
-		log.Err(err).Msg("failed to read response body")
-		return resp.StatusCode, nil, nil, err
+		return nil, err
+	}
+	defer func() { _ = response.Body.Close() }()
+
+	if response.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(response.Body)
+		fmt.Println(string(b), string(queryBuf))
+		return nil, errors.New("non-positive " + strconv.Itoa(response.StatusCode) + " status code received from pagedata")
 	}
 
-	return resp.StatusCode, body, resp.Header, nil
+	body, err := utils.ReadResponseBody(response)
+	if err != nil {
+		return nil, err
+	}
+
+	return model.NewData(response.StatusCode, response.Header, body), nil
 }

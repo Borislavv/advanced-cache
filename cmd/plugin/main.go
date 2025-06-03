@@ -1,91 +1,63 @@
 package main
 
 import (
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage"
+	"context"
+	"github.com/Borislavv/traefik-http-cache-plugin/internal/cache"
+	"github.com/Borislavv/traefik-http-cache-plugin/internal/cache/config"
+	"github.com/joho/godotenv"
+	"github.com/rs/zerolog/log"
+	"github.com/spf13/viper"
+	"gitlab.xbet.lan/v3group/backend/packages/go/liveness-prober"
+	"go.uber.org/automaxprocs/maxprocs"
+	"runtime"
 )
 
 func init() {
-	//zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
-	//zerolog.SetGlobalLevel(zerolog.DebugLevel)
-	//log.Logger = log.Output(os.Stdout)
-	//
-	//store = storage.New(config.Storage{
-	//	EvictionAlgo:        string(algo.LRU),
-	//	MemoryFillThreshold: 0.95,
-	//	MemoryLimit:         1024 * 1024 * 10,
-	//})
-	//
-	//ctx, cancel := context.WithCancel(context.Background())
-	//defer cancel()
-	//
-	//seoRepo := repository.NewSeo()
-	//
-	//cfg := config.Response{
-	//	RevalidateBeta:     0.5,
-	//	RevalidateInterval: time.Minute * 10,
-	//}
-	//
-	//reqs = make([]*model.Request, 0, 10000)
-	//for i := 0; i < 10000; i++ {
-	//	req := model.NewRequest("285", "1xbet.com", "en", `{"name": "betting", "choice": null}`+strconv.Itoa(i))
-	//	resp, err := model.NewResponse(cfg, http.Header{}, req, []byte(`{"data": "success"}`), func() ([]byte, error) {
-	//		return seoRepo.PageData()
-	//	})
-	//	if err != nil {
-	//		panic(err)
-	//	}
-	//	store.Set(ctx, resp)
-	//	reqs = append(reqs, req)
-	//}
+	_ = godotenv.Load()
+	viper.AutomaticEnv()
+	_ = viper.BindEnv("INIT_STORAGE_LEN_PER_SHARD")
+	_ = viper.BindEnv("EVICTION_ALGO")
+	_ = viper.BindEnv("MEMORY_FILL_THRESHOLD")
+	_ = viper.BindEnv("MEMORY_LIMIT")
+	_ = viper.BindEnv("REVALIDATE_BETA")
+	_ = viper.BindEnv("REVALIDATE_INTERVAL")
+	_ = viper.BindEnv("SEO_URL")
+	_ = viper.BindEnv("SERVER_NAME")
+	_ = viper.BindEnv("SERVER_PORT")
+	_ = viper.BindEnv("SERVER_SHUTDOWN_TIMEOUT")
+	_ = viper.BindEnv("SERVER_REQUEST_TIMEOUT")
+	_ = viper.BindEnv("IS_PROMETHEUS_METRICS_ENABLED")
+	_ = viper.BindEnv("LIVENESS_PROBE_FAILED_TIMEOUT")
+}
+
+func setMaxProcs() {
+	if _, err := maxprocs.Set(); err != nil {
+		log.Err(err).Msg("setting up GOMAXPROCS value failed")
+		panic(err)
+	}
+	log.Info().Msgf("optimized GOMAXPROCS=%d was sat up", runtime.GOMAXPROCS(0))
+}
+
+func loadCfg() *config.Config {
+	cfg := &config.Config{}
+	if err := viper.Unmarshal(cfg); err != nil {
+		log.Err(err).Msg("failed to unmarshal config from envs")
+		panic(err)
+	}
+	return cfg
 }
 
 func main() {
-	//go func() {
-	//	if err := http.ListenAndServe("0.0.0.0:8080", nil); err != nil {
-	//		log.Fatal().Err(err).Msg("Failed to start server")
-	//	}
-	//}()
-	//
-	//var i int
-	//for {
-	//	if i >= 10000 {
-	//		i = 0
-	//	}
-	//	store.Get(reqs[i%10000])
-	//	i++
-	//}
-}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-func getData(ctx context.Context, db storage.Storage, seoRepo repository.Seo, req *model.Request) {
-	_, _, _, _, err := db.Get(ctx, req, seoRepo.PageData)
-	if err != nil {
-		log.Err(err).Msg("failed to get body")
-		return
-	}
+	setMaxProcs()
+	cfg := loadCfg()
+	probe := liveness.NewProbe(cfg.LivenessProbeTimeout)
 
-	_, _, _, _, err = db.Get(ctx, req, seoRepo.PageData)
-	if err != nil {
-		log.Err(err).Msg("failed to get body")
-		return
+	if app, err := cache.NewApp(ctx, cfg, probe); err != nil {
+		log.Err(err).Msg("failed init. cache app")
+	} else {
+		app.Start()
 	}
-
-	_, _, _, _, err = db.Get(ctx, req, seoRepo.PageData)
-	if err != nil {
-		log.Err(err).Msg("failed to get body")
-		return
-	}
-
-	_, _, _, _, err = db.Get(ctx, req, seoRepo.PageData)
-	if err != nil {
-		log.Err(err).Msg("failed to get body")
-		return
-	}
-
-	_, _, _, _, err = db.Get(ctx, req, seoRepo.PageData)
-	if err != nil {
-		log.Err(err).Msg("failed to get body")
-		return
-	}
-	//fmt.Println(string(data))
 }

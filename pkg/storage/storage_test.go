@@ -14,8 +14,6 @@ import (
 	"github.com/spf13/viper"
 )
 
-var bts = []byte("{success: true}")
-
 func init() {
 	_ = godotenv.Load()
 	viper.AutomaticEnv()

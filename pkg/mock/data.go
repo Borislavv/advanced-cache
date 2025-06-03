@@ -28,10 +28,17 @@ func GenerateRandomRequests(num int) []*model.Request {
 					return list
 				}
 				list = append(list, model.NewRequest(
-					strconv.Itoa(projectID),
-					"california-sunshine.com",
-					string(lng),
-					`{"name": "betting_`+strconv.Itoa(projectID*i)+`","choice": {"name": "betting_`+GenerateRandomString()+`_sport", "choice": null}}`,
+					[]byte(strconv.Itoa(projectID)),
+					[]byte("california-sunshine.com"),
+					[]byte(lng),
+					[][]byte{
+						[]byte(`betting_` + strconv.Itoa(projectID)),
+						[]byte(`betting_null`),
+						[]byte(`betting_null_sport`),
+						[]byte(`betting_null_sport_` + strconv.Itoa(i)),
+						[]byte(`betting_null_sport_` + strconv.Itoa(i) + `_` + strconv.Itoa(i*i)),
+						[]byte(`betting_null_sport_` + strconv.Itoa(i) + `_` + strconv.Itoa(i*i) + `_` + strconv.Itoa(projectID*i)),
+					},
 				))
 				i++
 			}
