@@ -8,6 +8,7 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
+	"github.com/rs/zerolog/log"
 )
 
 type Seo interface {
@@ -27,19 +28,19 @@ func NewSeo(cfg config.Repository) *SeoRepository {
 func (s *SeoRepository) PageData(ctx context.Context, req *model.Request) (statusCode int, body []byte, headers http.Header, err error) {
 	query, err := req.ToQuery()
 	if err != nil {
-		// log.Err(err).Msg("failed to build query")
+		log.Err(err).Msg("failed to build query")
 		return 0, nil, nil, err
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, s.cfg.SeoUrl+query, nil)
 	if err != nil {
-		// log.Err(err).Msg("failed to build request")
+		log.Err(err).Msg("failed to build request")
 		return 0, nil, nil, err
 	}
 
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
-		// log.Err(err).Msg("failed to fetch pagedata")
+		log.Err(err).Msg("failed to fetch pagedata")
 		return 0, nil, nil, err
 	}
 	defer resp.Body.Close()
@@ -50,7 +51,7 @@ func (s *SeoRepository) PageData(ctx context.Context, req *model.Request) (statu
 
 	body, err = utils.ReadResponseBody(resp)
 	if err != nil {
-		// log.Err(err).Msg("failed to read response body")
+		log.Err(err).Msg("failed to read response body")
 		return resp.StatusCode, nil, nil, err
 	}
 
