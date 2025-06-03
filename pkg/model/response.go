@@ -3,6 +3,7 @@ package model
 import (
 	"container/list"
 	"context"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/rs/zerolog/log"
 	"math"
 	"math/rand"
@@ -10,9 +11,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
-
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 )
 
 var ResponsePool = &sync.Pool{
@@ -41,6 +39,7 @@ func (d *Data) Headers() http.Header { return d.headers }
 func (d *Data) StatusCode() int      { return d.statusCode }
 func (d *Data) Body() []byte         { return d.body }
 
+// Response weight is 80 bytes
 type Response struct {
 	/* mutable (pointer change but data are immutable) */
 	data atomic.Pointer[Data]
@@ -134,5 +133,34 @@ func (r *Response) GetRevalidatedAt() time.Time {
 	return time.Unix(0, r.revalidatedAt.Load())
 }
 func (r *Response) Size() uintptr {
-	return unsafe.Sizeof(*r)
+	var size = 80
+
+	data := r.data.Load()
+	if data != nil {
+		for key, values := range data.headers {
+			size += len(key)
+			for _, val := range values {
+				size += len(val)
+			}
+		}
+		size += len(data.body)
+		// statusCode: 4 bytes (int)
+		size += 4
+	}
+
+	req := r.GetRequest()
+	if req != nil {
+		size += len(req.project)
+		size += len(req.domain)
+		size += len(req.language)
+		for _, tag := range req.tags {
+			size += len(tag)
+		}
+		size += 24 // tags field is slice
+		size += len(req.uniqueQuery)
+		size += 8 // req.uniqueKey: 8 bytes (uint64)
+	}
+	size += 47 // data, revalidatedAt, revalidateBeta, cfg, listElem,
+
+	return uintptr(size)
 }
