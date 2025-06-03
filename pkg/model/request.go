@@ -11,6 +11,12 @@ import (
 
 const preallocatedQueryBufCapacity = 170 // for pre-allocated buffer for concat string literals and url
 
+var RequestsPool = sync.Pool{
+	New: func() interface{} {
+		return &Request{}
+	},
+}
+
 type Request struct {
 	mu       *sync.RWMutex
 	project  []byte
@@ -23,26 +29,7 @@ type Request struct {
 }
 
 func NewRequest(q *fasthttp.Args) (*Request, error) {
-	project := q.Peek("project[id]")
-	if project == nil || len(project) == 0 {
-		return nil, errors.New("project is not specified")
-	}
-	domain := q.Peek("domain")
-	if domain == nil || len(domain) == 0 {
-		return nil, errors.New("domain is not specified")
-	}
-	language := q.Peek("language")
-	if language == nil || len(language) == 0 {
-		return nil, errors.New("language is not specified")
-	}
-	return (&Request{
-		mu:        &sync.RWMutex{},
-		project:   project,
-		domain:    domain,
-		language:  language,
-		tags:      ExtractTags(q),
-		uniqueKey: &atomic.Uint64{},
-	}).warmUp(), nil
+	return NewManualRequest(q.Peek("project[id]"), q.Peek("domain"), q.Peek("language"), ExtractTags(q))
 }
 
 func NewManualRequest(project, domain, language []byte, tags [][]byte) (*Request, error) {
@@ -55,14 +42,30 @@ func NewManualRequest(project, domain, language []byte, tags [][]byte) (*Request
 	if language == nil || len(language) == 0 {
 		return nil, errors.New("language is not specified")
 	}
-	return (&Request{
-		mu:        &sync.RWMutex{},
-		project:   project,
-		domain:    domain,
-		language:  language,
-		tags:      tags,
-		uniqueKey: &atomic.Uint64{},
-	}).warmUp(), nil
+
+	req, ok := RequestsPool.Get().(*Request)
+	if !ok {
+		panic("request pool must contains only *model.Request")
+	}
+
+	if req.mu == nil {
+		req.mu = new(sync.RWMutex)
+	}
+	if req.uniqueQuery != nil {
+		req.uniqueQuery = req.uniqueQuery[:0]
+	}
+	if req.uniqueKey == nil {
+		req.uniqueKey = atomic.NewUint64(0)
+	}
+
+	req.project = project
+	req.domain = domain
+	req.language = language
+	req.tags = tags
+
+	req.warmUp()
+
+	return req, nil
 }
 
 // ExtractTags - returns a slice with []byte("${choice name}").

@@ -7,12 +7,19 @@ import (
 	"math"
 	"math/rand"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
 
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 )
+
+var ResponsePool = &sync.Pool{
+	New: func() interface{} {
+		return &Response{}
+	},
+}
 
 type ResponseRevalidator = func(ctx context.Context) (data *Data, err error)
 
@@ -58,14 +65,19 @@ func NewResponse(
 	cfg *config.Config,
 	revalidator ResponseRevalidator,
 ) (*Response, error) {
-	resp := &Response{
-		cfg:         cfg,
-		tags:        req.GetTags(),
-		revalidator: revalidator,
+	resp, ok := ResponsePool.Get().(*Response)
+	if !ok {
+		panic("pool must contains only *model.Response")
 	}
-	resp.data.Store(data)
+	if resp.cfg == nil {
+		resp.cfg = cfg
+	}
 	resp.request.Store(req)
+	resp.revalidator = revalidator
+	resp.tags = req.GetTags()
+	resp.data.Store(data)
 	resp.revalidatedAt.Store(time.Now().UnixNano())
+	resp.listElement.Store(nil)
 	return resp, nil
 }
 

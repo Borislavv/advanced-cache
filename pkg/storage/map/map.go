@@ -85,7 +85,7 @@ func (m *Map[K, V]) Get(key K, shardKey uint) (value V, found bool) {
 	return v, ok
 }
 
-func (m *Map[K, V]) Del(key K) {
+func (m *Map[K, V]) Del(key K) (value V, found bool) {
 	s := m.getShard(key)
 	s.Lock()
 	defer s.Unlock()
@@ -95,6 +95,7 @@ func (m *Map[K, V]) Del(key K) {
 		m.mem.Add(-v.Size())
 		m.len.Add(-1)
 	}
+	return v, f
 }
 
 func (m *Map[K, V]) Has(key K) bool {

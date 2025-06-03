@@ -149,7 +149,10 @@ func (c *LRUAlgo) evictBatch(ctx context.Context, shardKey uint, num int) int {
 			return evictionsNum
 		default:
 			if back := shard.Back(); evictionsNum < num && back != nil {
-				c.shardedMap.Del(back.Value.(*model.Request).UniqueKey())
+				if resp, found := c.shardedMap.Del(back.Value.(*model.Request).UniqueKey()); found {
+					model.RequestsPool.Put(resp.GetRequest())
+					model.ResponsePool.Put(resp)
+				}
 				shard.Remove(back)
 				evictionsNum++
 			} else {
