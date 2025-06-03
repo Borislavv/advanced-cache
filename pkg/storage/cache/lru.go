@@ -6,11 +6,13 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
 	"github.com/rs/zerolog/log"
 	"math"
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 const (
@@ -51,6 +53,18 @@ func NewLRU(ctx context.Context, cfg *config.Config) *LRUAlgo {
 	for i := 0; i < sharded.ShardCount; i++ {
 		lru.shardedOrderedList[i] = NewOrderedList()
 	}
+
+	go func() {
+		t := utils.NewTicker(ctx, time.Second)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t:
+				log.Info().Msgf("LRU: memory usage: %s, storage len: %d.", utils.FmtMem(lru.shardedMap.Mem()), lru.shardedMap.Len())
+			}
+		}
+	}()
 
 	return lru
 }

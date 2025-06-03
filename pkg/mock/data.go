@@ -27,19 +27,23 @@ func GenerateRandomRequests(num int) []*model.Request {
 				if i > num {
 					return list
 				}
-				list = append(list, model.NewRequest(
+				req, err := model.NewManualRequest(
 					[]byte(strconv.Itoa(projectID)),
 					[]byte("california-sunshine.com"),
 					[]byte(lng),
 					[][]byte{
-						[]byte(`betting_` + strconv.Itoa(projectID)),
+						[]byte(`betting`),
 						[]byte(`betting_null`),
 						[]byte(`betting_null_sport`),
 						[]byte(`betting_null_sport_` + strconv.Itoa(i)),
 						[]byte(`betting_null_sport_` + strconv.Itoa(i) + `_` + strconv.Itoa(i*i)),
 						[]byte(`betting_null_sport_` + strconv.Itoa(i) + `_` + strconv.Itoa(i*i) + `_` + strconv.Itoa(projectID*i)),
 					},
-				))
+				)
+				if err != nil {
+					panic(err)
+				}
+				list = append(list, req)
 				i++
 			}
 		}

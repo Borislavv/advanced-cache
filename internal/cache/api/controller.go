@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"github.com/Borislavv/traefik-http-cache-plugin/internal/cache/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/repository"
@@ -63,7 +62,7 @@ func (c *CacheController) Index(r *fasthttp.RequestCtx) {
 		log.Warn().Msg(err.Error())
 	}
 
-	req, err := c.makeModelRequest(r)
+	req, err := model.NewRequest(r.QueryArgs())
 	if err != nil {
 		c.respondThatTheRequestIsBad(err, r)
 		return
@@ -117,22 +116,6 @@ func (c *CacheController) respondThatTheRequestIsBad(err error, ctx *fasthttp.Re
 func (c *CacheController) resolveMessagePlaceholder(msg []byte, err error) []byte {
 	escaped, _ := json.Marshal(err.Error())
 	return bytes.ReplaceAll(msg, messagePlaceholder, escaped[1:len(escaped)-1])
-}
-
-func (c *CacheController) makeModelRequest(r *fasthttp.RequestCtx) (*model.Request, error) {
-	project := r.QueryArgs().Peek("project[id]")
-	if project == nil || len(project) == 0 {
-		return nil, errors.New("project is not specified")
-	}
-	domain := r.QueryArgs().Peek("domain")
-	if domain == nil || len(domain) == 0 {
-		return nil, errors.New("domain is not specified")
-	}
-	language := r.QueryArgs().Peek("language")
-	if language == nil || len(language) == 0 {
-		return nil, errors.New("language is not specified")
-	}
-	return model.NewRequest(project, domain, language, model.ExtractTags(r.QueryArgs())), nil
 }
 
 func (c *CacheController) AddRoute(router *router.Router) {

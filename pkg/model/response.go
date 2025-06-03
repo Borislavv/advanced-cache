@@ -1,23 +1,18 @@
 package model
 
 import (
-	"bytes"
 	"container/list"
 	"context"
 	"github.com/rs/zerolog/log"
-	"github.com/valyala/fasthttp"
 	"math"
 	"math/rand"
 	"net/http"
-	"sort"
 	"sync/atomic"
 	"time"
 	"unsafe"
 
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 )
-
-const nameToken = "name"
 
 type ResponseRevalidator = func(ctx context.Context) (data *Data, err error)
 
@@ -128,32 +123,4 @@ func (r *Response) GetRevalidatedAt() time.Time {
 }
 func (r *Response) Size() uintptr {
 	return unsafe.Sizeof(*r)
-}
-
-// ExtractTags - returns a slice with []byte("${choice name}").
-func ExtractTags(args *fasthttp.Args) [][]byte {
-	type entry struct {
-		depth int
-		value []byte
-	}
-
-	var entries []entry
-	args.VisitAll(func(key, value []byte) {
-		if !bytes.HasPrefix(key, choiceValue) || bytes.Equal(value, nullValue) {
-			return
-		}
-		depth := bytes.Count(key, arrChoiceValue)
-		entries = append(entries, entry{depth: depth, value: value})
-	})
-
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].depth < entries[j].depth
-	})
-
-	ordered := make([][]byte, 0, len(entries))
-	for _, entryItem := range entries {
-		ordered = append(ordered, entryItem.value)
-	}
-
-	return ordered
 }

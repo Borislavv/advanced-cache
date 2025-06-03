@@ -1,18 +1,15 @@
 package model
 
 import (
+	"bytes"
+	"errors"
+	"github.com/valyala/fasthttp"
 	"github.com/zeebo/xxh3"
 	"go.uber.org/atomic"
 	"sync"
 )
 
-const preallocatedQueryBufCapacity = 100 // for pre-allocated buffer for concat string literals and url
-
-var (
-	nullValue      = []byte("null")
-	choiceValue    = []byte("choice")
-	arrChoiceValue = []byte("[choice]")
-)
+const preallocatedQueryBufCapacity = 170 // for pre-allocated buffer for concat string literals and url
 
 type Request struct {
 	mu       *sync.RWMutex
@@ -25,7 +22,39 @@ type Request struct {
 	uniqueKey   *atomic.Uint64
 }
 
-func NewRequest(project, domain, language []byte, tags [][]byte) *Request {
+func NewRequest(q *fasthttp.Args) (*Request, error) {
+	project := q.Peek("project[id]")
+	if project == nil || len(project) == 0 {
+		return nil, errors.New("project is not specified")
+	}
+	domain := q.Peek("domain")
+	if domain == nil || len(domain) == 0 {
+		return nil, errors.New("domain is not specified")
+	}
+	language := q.Peek("language")
+	if language == nil || len(language) == 0 {
+		return nil, errors.New("language is not specified")
+	}
+	return (&Request{
+		mu:        &sync.RWMutex{},
+		project:   project,
+		domain:    domain,
+		language:  language,
+		tags:      ExtractTags(q),
+		uniqueKey: &atomic.Uint64{},
+	}).warmUp(), nil
+}
+
+func NewManualRequest(project, domain, language []byte, tags [][]byte) (*Request, error) {
+	if project == nil || len(project) == 0 {
+		return nil, errors.New("project is not specified")
+	}
+	if domain == nil || len(domain) == 0 {
+		return nil, errors.New("domain is not specified")
+	}
+	if language == nil || len(language) == 0 {
+		return nil, errors.New("language is not specified")
+	}
 	return (&Request{
 		mu:        &sync.RWMutex{},
 		project:   project,
@@ -33,7 +62,24 @@ func NewRequest(project, domain, language []byte, tags [][]byte) *Request {
 		language:  language,
 		tags:      tags,
 		uniqueKey: &atomic.Uint64{},
-	}).warmUp()
+	}).warmUp(), nil
+}
+
+// ExtractTags - returns a slice with []byte("${choice name}").
+func ExtractTags(args *fasthttp.Args) [][]byte {
+	var (
+		nullValue   = []byte("null")
+		choiceValue = []byte("choice")
+	)
+
+	var tags [][]byte
+	args.VisitAll(func(key, value []byte) {
+		if !bytes.HasPrefix(key, choiceValue) || bytes.Equal(value, nullValue) {
+			return
+		}
+		tags = append(tags, value)
+	})
+	return tags
 }
 
 func (r *Request) GetProject() []byte {
@@ -83,8 +129,8 @@ func (r *Request) ToQuery() []byte {
 	}
 
 	bufCap := preallocatedQueryBufCapacity + len(r.project) + len(r.domain) + len(r.language)
-	for i := 0; i < len(r.tags); i++ {
-		bufCap += len(r.tags[i])
+	for _, tag := range r.tags {
+		bufCap += len(tag)
 	}
 
 	buf := make([]byte, 0, bufCap)
@@ -95,15 +141,12 @@ func (r *Request) ToQuery() []byte {
 	buf = append(buf, []byte("&language=")...)
 	buf = append(buf, r.language...)
 
-	l := len(r.tags) - 1
-	for i := l; i >= 0; i-- {
-		name := r.tags[i]
-		buf = append(buf, []byte("&choice[name]=")...)
-		buf = append(buf, name...)
-		if i+1 < l {
-			buf = append(buf, []byte("&choice[choice]=")...)
-			buf = append(buf, r.tags[i+1]...)
-		}
+	var choiceArrBytes = []byte("[choice]")
+	for n, tag := range r.tags {
+		buf = append(buf, []byte("&choice")...)
+		buf = append(buf, bytes.Repeat(choiceArrBytes, n)...)
+		buf = append(buf, []byte("[name]=")...)
+		buf = append(buf, tag...)
 	}
 
 	r.mu.Lock()
