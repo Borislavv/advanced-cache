@@ -3,16 +3,14 @@ package cache
 import (
 	"container/list"
 	"context"
-	"errors"
-	"math"
-	"strconv"
-	"sync"
-	"sync/atomic"
-
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
 	"github.com/rs/zerolog/log"
+	"math"
+	"strconv"
+	"sync"
+	"sync/atomic"
 )
 
 const (
@@ -61,36 +59,20 @@ func (c *LRUAlgo) Get(ctx context.Context, req *model.Request) (resp *model.Resp
 	key := req.UniqueKey()
 	shardKey := c.shardedMap.GetShardKey(key)
 
-	resp, found := c.shardedMap.Get(key, shardKey)
+	resp, found = c.shardedMap.Get(key, shardKey)
 	if !found {
-		resp, err = c.computeResponse(ctx, req, fn)
-		if err != nil {
-			return nil, false, errors.New("failed to compute response: " + err.Error())
-		}
-		c.set(ctx, resp)
-		return resp, false, nil
+		return nil, false
 	}
-
 	c.recordHit(shardKey, resp)
+
 	if resp.ShouldBeRevalidated() {
 		go resp.Revalidate(ctx)
 	}
 
-	return resp, true, nil
+	return resp, true
 }
 
-func (c *LRUAlgo) computeResponse(ctx context.Context, req *model.Request, fn model.ResponseCreator) (*model.Response, error) {
-	statusCode, data, header, err := fn(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	return model.NewResponse(
-		header, statusCode, req, data, fn,
-		c.cfg.RevalidateInterval, c.cfg.RevalidateBeta,
-	)
-}
-
-func (c *LRUAlgo) set(ctx context.Context, resp *model.Response) {
+func (c *LRUAlgo) Set(ctx context.Context, resp *model.Response) {
 	key := resp.GetRequest().UniqueKey()
 	shardKey := c.shardedMap.GetShardKey(key)
 
