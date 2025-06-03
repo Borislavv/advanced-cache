@@ -60,18 +60,6 @@ type Response struct {
 	creator ResponseCreator
 }
 
-func (d *Datum) Headers() http.Header {
-	return d.headers
-}
-
-func (d *Datum) StatusCode() int {
-	return d.statusCode
-}
-
-func (d *Datum) Body() []byte {
-	return d.body
-}
-
 func NewResponse(
 	data *Data,
 	req *Request,

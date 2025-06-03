@@ -9,9 +9,6 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/mock"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/cache"
-	"github.com/rs/zerolog/log"
-
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/joho/godotenv"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
