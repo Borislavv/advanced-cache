@@ -3,8 +3,6 @@ package repository
 import (
 	"context"
 	"errors"
-	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 
@@ -67,8 +65,6 @@ func (s *SeoRepository) requestPagedata(ctx context.Context, req *model.Request)
 	defer func() { _ = response.Body.Close() }()
 
 	if response.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(response.Body)
-		fmt.Println(string(b), string(queryBuf))
 		return nil, errors.New("non-positive " + strconv.Itoa(response.StatusCode) + " status code received from pagedata")
 	}
 
