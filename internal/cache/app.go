@@ -16,12 +16,11 @@ type App interface {
 }
 
 type Cache struct {
+	cfg    *config.Config
 	ctx    context.Context
 	cancel context.CancelFunc
 	probe  liveness.Prober
 	server server.Http
-
-	cfg *config.Config
 }
 
 func NewApp(ctx context.Context, cfg *config.Config, probe liveness.Prober) (*Cache, error) {
