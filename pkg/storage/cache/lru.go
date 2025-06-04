@@ -81,7 +81,7 @@ func (c *LRUAlgo) runLogDebugInfo(ctx context.Context) {
 				evictsPer3Secs += evictsPerIter
 			case <-t:
 				log.Debug().Msgf(
-					"[lru]: evicted %d (5sec), memory usage: %s, storage len: %d.",
+					"[lru]: evicted %d (5s), memory usage: %s, storage len: %d.",
 					evictsPer3Secs, utils.FmtMem(c.shardedMap.Mem()), c.shardedMap.Len(),
 				)
 				evictsPer3Secs = 0

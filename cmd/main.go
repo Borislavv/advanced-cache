@@ -15,7 +15,7 @@ import (
 )
 
 func init() {
-	if err := godotenv.Overload(".env.local", ".env"); err != nil {
+	if err := godotenv.Overload(".env", ".env.local"); err != nil {
 		panic(err)
 	}
 
