@@ -61,7 +61,7 @@ func NewLRU(ctx context.Context, cfg *config.Config) *LRUAlgo {
 
 func (c *LRUAlgo) logStatInfo(ctx context.Context) {
 	evictsPer3Secs := 0
-	t := utils.NewTicker(ctx, time.Second*3)
+	t := utils.NewTicker(ctx, time.Second*5)
 	for {
 		select {
 		case <-ctx.Done():
@@ -70,7 +70,7 @@ func (c *LRUAlgo) logStatInfo(ctx context.Context) {
 			evictsPer3Secs += evictsPerIter
 		case <-t:
 			log.Info().Msgf(
-				"LRU: evicted %d items at the last 3 seconds. Stat: memory usage: %s, storage len: %d.",
+				"LRU: evicted %d items at the last 5 seconds. Stat: memory usage: %s, storage len: %d.",
 				evictsPer3Secs, utils.FmtMem(c.shardedMap.Mem()), c.shardedMap.Len(),
 			)
 			evictsPer3Secs = 0
