@@ -9,7 +9,6 @@ import (
 	"github.com/rs/zerolog/log"
 	"gitlab.xbet.lan/v3group/backend/packages/go/graceful-shutdown/pkg/shutdown"
 	"gitlab.xbet.lan/v3group/backend/packages/go/liveness-prober"
-	"sync"
 )
 
 type App interface {
@@ -49,8 +48,6 @@ func (c *Cache) Start(gc shutdown.Gracefuller) {
 
 	go func() {
 		defer close(waitCh)
-		wg := &sync.WaitGroup{}
-		defer wg.Wait()
 		c.server.Start()
 		c.probe.Watch(c)
 	}()
