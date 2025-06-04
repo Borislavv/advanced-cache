@@ -23,7 +23,7 @@ type Config struct {
 	InitStorageLengthPerShard int           `mapstructure:"INIT_STORAGE_LEN_PER_SHARD"`
 	EvictionAlgo              string        `mapstructure:"EVICTION_ALGO"`
 	MemoryFillThreshold       float64       `mapstructure:"MEMORY_FILL_THRESHOLD"`
-	MemoryLimit               float64       `mapstructure:"MEMORY_LIMIT"`
+	MemoryLimit               uint          `mapstructure:"MEMORY_LIMIT"`
 	LivenessProbeTimeout      time.Duration `mapstructure:"LIVENESS_PROBE_FAILED_TIMEOUT"`
 }
 

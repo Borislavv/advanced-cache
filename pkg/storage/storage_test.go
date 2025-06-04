@@ -35,7 +35,7 @@ func BenchmarkReadFromStorage1000TimesPerIter(b *testing.B) {
 
 	responses := mock.GenerateRandomResponses(cfg, b.N+1)
 	for _, resp := range responses {
-		db.Set(ctx, resp)
+		db.Set(resp)
 	}
 	length := len(responses)
 
@@ -48,7 +48,7 @@ func BenchmarkReadFromStorage1000TimesPerIter(b *testing.B) {
 		i := 0
 		for pb.Next() {
 			for j := 0; j < 1000; j++ {
-				_, _ = db.Get(ctx, responses[(i+j)%length].GetRequest())
+				_, _ = db.Get(responses[(i+j)%length].GetRequest())
 			}
 			i += 1000
 		}
@@ -93,7 +93,7 @@ func BenchmarkWriteIntoStorage1000TimesPerIter(b *testing.B) {
 		for pb.Next() {
 			for j := 0; j < 1000; j++ {
 				resp := responses[(i+j)%length]
-				db.Set(ctx, resp)
+				db.Set(resp)
 			}
 			i += 1000
 		}

@@ -9,8 +9,8 @@ import (
 )
 
 type Storage interface {
-	Get(ctx context.Context, req *model.Request) (resp *model.Response, found bool)
-	Set(ctx context.Context, resp *model.Response)
+	Get(req *model.Request) (resp *model.Response, found bool)
+	Set(resp *model.Response)
 	Del(req *model.Request)
 }
 
@@ -24,7 +24,7 @@ func New(ctx context.Context, cfg *config.Config) *AlgoStorage {
 	case cache.LRU:
 		s = cache.NewLRU(ctx, cfg)
 	default:
-		panic("algorithm \"" + cfg.EvictionAlgo + "\" does not implemented yet")
+		panic("algorithm " + cfg.EvictionAlgo + " does not implemented yet")
 	}
 	return &AlgoStorage{Storage: s}
 }

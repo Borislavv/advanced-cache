@@ -88,13 +88,13 @@ func (m *Map[K, V]) Get(key K, shardKey uint) (value V, found bool) {
 func (m *Map[K, V]) Del(key K) (value V, found bool) {
 	s := m.getShard(key)
 	s.Lock()
-	defer s.Unlock()
 	v, f := s.items[key]
 	if f {
 		delete(s.items, key)
 		m.mem.Add(-v.Size())
 		m.len.Add(-1)
 	}
+	s.Unlock()
 	return v, f
 }
 

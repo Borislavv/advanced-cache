@@ -39,14 +39,6 @@ var (
 	durCh chan time.Duration
 )
 
-type stat struct {
-	label    string
-	divider  int // in seconds
-	tickerCh <-chan time.Time
-	count    int
-	total    time.Duration
-}
-
 type CacheController struct {
 	cfg     *config.Config
 	ctx     context.Context
@@ -66,7 +58,7 @@ func NewCacheController(
 		cache:   cache,
 		seoRepo: seoRepo,
 	}
-	if c.isDebuggingEnabled() {
+	if c.cfg.IsDebugOn() {
 		c.runLogDebugInfo(ctx)
 	}
 	return c
@@ -87,14 +79,14 @@ func (c *CacheController) Index(r *fasthttp.RequestCtx) {
 		return
 	}
 
-	resp, found := c.cache.Get(ctx, req)
+	resp, found := c.cache.Get(req)
 	if !found {
 		resp, err = c.seoRepo.PageData(ctx, req)
 		if err != nil {
 			c.respondThatServiceIsTemporaryUnavailable(err, r)
 			return
 		}
-		c.cache.Set(ctx, resp)
+		c.cache.Set(resp)
 	}
 
 	data := resp.GetData()
@@ -111,7 +103,7 @@ func (c *CacheController) Index(r *fasthttp.RequestCtx) {
 		return
 	}
 
-	if c.isDebuggingEnabled() {
+	if c.cfg.IsDebugOn() {
 		durCh <- time.Since(f)
 	}
 }
@@ -143,8 +135,12 @@ func (c *CacheController) AddRoute(router *router.Router) {
 	router.GET(CacheGetPath, c.Index)
 }
 
-func (c *CacheController) isDebuggingEnabled() bool {
-	return c.cfg.IsDebugOn()
+type stat struct {
+	label    string
+	divider  int // in seconds
+	tickerCh <-chan time.Time
+	count    int
+	total    time.Duration
 }
 
 func (c *CacheController) runLogDebugInfo(ctx context.Context) {
@@ -187,8 +183,10 @@ func (c *CacheController) logAndReset(s *stat) {
 	} else {
 		avg = zeroLiteral
 	}
-	log.Info().Msgf("[stat] RPS: %d, total req: %d (%s), avg duration %s",
-		s.count/s.divider, s.count, s.label, avg)
+	log.Info().Msgf(
+		"[stat] RPS: %d, total req: %d (%s), avg duration %s",
+		s.count/s.divider, s.count, s.label, avg,
+	)
 	s.count = 0
 	s.total = 0
 }

@@ -8,7 +8,6 @@ import (
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
 	"github.com/rs/zerolog/log"
-	"math"
 	"sync"
 	"time"
 )
@@ -18,7 +17,7 @@ const (
 )
 
 var (
-	evictsCh chan int
+	evictsCh chan uintptr
 )
 
 type OrderedList struct {
@@ -34,6 +33,7 @@ func NewOrderedList() *OrderedList {
 }
 
 type LRUAlgo struct {
+	ctx context.Context
 	cfg *config.Config
 
 	shardedMap        *sharded.Map[uint64, *model.Response]
@@ -46,9 +46,10 @@ type LRUAlgo struct {
 
 func NewLRU(ctx context.Context, cfg *config.Config) *LRUAlgo {
 	lru := &LRUAlgo{
+		ctx:               ctx,
 		cfg:               cfg,
 		shardedMap:        sharded.NewMap[uint64, *model.Response](cfg.InitStorageLengthPerShard),
-		evictionThreshold: uintptr(math.Round(cfg.MemoryLimit * cfg.MemoryFillThreshold)),
+		evictionThreshold: uintptr(float64(cfg.MemoryLimit) * cfg.MemoryFillThreshold),
 		activeEvictorsCh:  make(chan struct{}, maxEvictors),
 	}
 
@@ -56,22 +57,18 @@ func NewLRU(ctx context.Context, cfg *config.Config) *LRUAlgo {
 		lru.shardedOrderedList[i] = NewOrderedList()
 	}
 
-	if lru.isDebuggingEnabled() {
+	if cfg.IsDebugOn() {
 		lru.runLogDebugInfo(ctx)
 	}
 
 	return lru
 }
 
-func (c *LRUAlgo) isDebuggingEnabled() bool {
-	return c.cfg.IsDebugOn()
-}
-
 func (c *LRUAlgo) runLogDebugInfo(ctx context.Context) {
-	evictsCh = make(chan int, maxEvictors)
+	evictsCh = make(chan uintptr, maxEvictors)
 
 	go func() {
-		evictsPer3Secs := 0
+		var evictsPer3Secs uintptr
 		t := utils.NewTicker(ctx, time.Second*5)
 		for {
 			select {
@@ -81,8 +78,8 @@ func (c *LRUAlgo) runLogDebugInfo(ctx context.Context) {
 				evictsPer3Secs += evictsPerIter
 			case <-t:
 				log.Debug().Msgf(
-					"[lru]: evicted %d (5s), memory usage: %s, storage len: %d.",
-					evictsPer3Secs, utils.FmtMem(c.shardedMap.Mem()), c.shardedMap.Len(),
+					"[lru]: evicted %d (5s), memory usage: %s (limit: %s), storage len: %d.",
+					evictsPer3Secs, utils.FmtMem(c.shardedMap.Mem()), utils.FmtMem(uintptr(c.cfg.MemoryLimit)), c.shardedMap.Len(),
 				)
 				evictsPer3Secs = 0
 			}
@@ -90,7 +87,7 @@ func (c *LRUAlgo) runLogDebugInfo(ctx context.Context) {
 	}()
 }
 
-func (c *LRUAlgo) Get(ctx context.Context, req *model.Request) (resp *model.Response, found bool) {
+func (c *LRUAlgo) Get(req *model.Request) (resp *model.Response, found bool) {
 	key := req.UniqueKey()
 	shardKey := c.shardedMap.GetShardKey(key)
 
@@ -101,13 +98,13 @@ func (c *LRUAlgo) Get(ctx context.Context, req *model.Request) (resp *model.Resp
 	c.recordHit(shardKey, resp)
 
 	if resp.ShouldBeRevalidated() {
-		go resp.Revalidate(ctx)
+		go resp.Revalidate(c.ctx)
 	}
 
 	return resp, true
 }
 
-func (c *LRUAlgo) Set(ctx context.Context, resp *model.Response) {
+func (c *LRUAlgo) Set(resp *model.Response) {
 	key := resp.GetRequest().UniqueKey()
 	shardKey := c.shardedMap.GetShardKey(key)
 
@@ -119,7 +116,7 @@ func (c *LRUAlgo) Set(ctx context.Context, resp *model.Response) {
 	}
 
 	if c.shouldEvict() {
-		c.evict(ctx, shardKey)
+		c.evict(c.ctx, shardKey)
 	}
 
 	c.recordPush(shardKey, resp)
@@ -139,24 +136,33 @@ func (c *LRUAlgo) evict(ctx context.Context, key uint) {
 	case c.activeEvictorsCh <- struct{}{}:
 		go func() {
 			defer func() { <-c.activeEvictorsCh }()
+			defer log.Debug().Msg("[evictor] closed")
+			log.Debug().Msg("[evictor] spawned")
 
-			mem := int(c.shardedMap.Mem())
-			length := int(c.shardedMap.Len())
+			for {
+				var (
+					mem             = c.shardedMap.Mem()
+					length          = uintptr(c.shardedMap.Len())
+					memThreshold    = c.evictionThreshold
+					needEvictMemory = mem - memThreshold
+				)
 
-			needEvictMemory := mem - int(c.evictionThreshold)
-			if needEvictMemory <= 0 || length == 0 {
-				return
-			}
+				if needEvictMemory <= 0 || length == 0 {
+					return
+				}
 
-			weighPerItem := mem / length
-			if weighPerItem == 0 {
-				weighPerItem = 1
-			}
+				weighPerItem := mem / length
+				if weighPerItem == 0 {
+					weighPerItem = 1
+				}
 
-			evicted := c.evictBatch(ctx, key, (needEvictMemory/weighPerItem)+1)
+				const coefficient float64 = 1.25
+				evicted := c.evictBatch(ctx, key, uintptr(float64(needEvictMemory/weighPerItem)*coefficient))
 
-			if c.isDebuggingEnabled() {
-				evictsCh <- evicted
+				log.Info().Msgf("evicted %d, but must %s", evicted, utils.FmtMem(uintptr(float64(needEvictMemory/weighPerItem)*coefficient)))
+				if c.cfg.IsDebugOn() {
+					evictsCh <- evicted
+				}
 			}
 		}()
 	default:
@@ -165,8 +171,22 @@ func (c *LRUAlgo) evict(ctx context.Context, key uint) {
 	}
 }
 
-func (c *LRUAlgo) evictBatch(ctx context.Context, shardKey uint, num int) int {
-	var evictionsNum int
+func (c *LRUAlgo) evictOne(shardKey uint) {
+	shard := c.shardedOrderedList[shardKey]
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+
+	if back := shard.Back(); back != nil {
+		defer shard.Remove(back)
+		if resp, found := c.shardedMap.Del(back.Value.(*model.Request).UniqueKey()); found {
+			model.RequestsPool.Put(resp.GetRequest())
+			model.ResponsePool.Put(resp)
+		}
+	}
+}
+
+func (c *LRUAlgo) evictBatch(ctx context.Context, shardKey uint, num uintptr) uintptr {
+	var evictionsNum uintptr
 
 	shard := c.shardedOrderedList[shardKey]
 	shard.mu.Lock()
@@ -181,10 +201,13 @@ func (c *LRUAlgo) evictBatch(ctx context.Context, shardKey uint, num int) int {
 				if resp, found := c.shardedMap.Del(back.Value.(*model.Request).UniqueKey()); found {
 					model.RequestsPool.Put(resp.GetRequest())
 					model.ResponsePool.Put(resp)
+					evictionsNum++
+				} else {
+					log.Info().Msg("[evictor] resp not found")
 				}
 				shard.Remove(back)
-				evictionsNum++
 			} else {
+				log.Info().Msgf("[evictor] back is nil: %v or evictionsNum < num: %v", back == nil, evictionsNum < num)
 				return evictionsNum
 			}
 		}
