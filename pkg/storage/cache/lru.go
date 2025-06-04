@@ -10,7 +10,6 @@ import (
 	"github.com/rs/zerolog/log"
 	"math"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -34,7 +33,7 @@ type LRUAlgo struct {
 	cfg *config.Config
 
 	shardedMap        *sharded.Map[uint64, *model.Response]
-	activeEvictors    *atomic.Int32
+	activeEvictorsCh  chan struct{}
 	evictsCh          chan int
 	evictionThreshold uintptr
 
@@ -47,7 +46,7 @@ func NewLRU(ctx context.Context, cfg *config.Config) *LRUAlgo {
 		cfg:               cfg,
 		shardedMap:        sharded.NewMap[uint64, *model.Response](cfg.InitStorageLengthPerShard),
 		evictionThreshold: uintptr(math.Round(cfg.MemoryLimit * cfg.MemoryFillThreshold)),
-		activeEvictors:    &atomic.Int32{},
+		activeEvictorsCh:  make(chan struct{}, maxEvictors),
 		evictsCh:          make(chan int, maxEvictors),
 	}
 
@@ -107,8 +106,8 @@ func (c *LRUAlgo) Set(ctx context.Context, resp *model.Response) {
 		return
 	}
 
-	if c.isEvictionNecessaryAndAvailable() {
-		go c.evict(ctx, shardKey)
+	if c.shouldEvict() {
+		c.evict(ctx, shardKey)
 	}
 
 	c.recordPush(shardKey, resp)
@@ -119,28 +118,35 @@ func (c *LRUAlgo) Del(req *model.Request) {
 	c.shardedMap.Del(req.UniqueKey())
 }
 
-func (c *LRUAlgo) isEvictionNecessaryAndAvailable() bool {
-	return c.shardedMap.Mem() > c.evictionThreshold && c.activeEvictors.Load() < maxEvictors
+func (c *LRUAlgo) shouldEvict() bool {
+	return c.shardedMap.Mem() > c.evictionThreshold
 }
 
 func (c *LRUAlgo) evict(ctx context.Context, key uint) {
-	c.activeEvictors.Add(1)
-	defer c.activeEvictors.Add(-1)
+	select {
+	case c.activeEvictorsCh <- struct{}{}:
+		go func() {
+			defer func() { <-c.activeEvictorsCh }()
 
-	mem := int(c.shardedMap.Mem())
-	length := int(c.shardedMap.Len())
+			mem := int(c.shardedMap.Mem())
+			length := int(c.shardedMap.Len())
 
-	needEvictMemory := mem - int(c.evictionThreshold)
-	if needEvictMemory <= 0 || length == 0 {
-		return
+			needEvictMemory := mem - int(c.evictionThreshold)
+			if needEvictMemory <= 0 || length == 0 {
+				return
+			}
+
+			weighPerItem := mem / length
+			if weighPerItem == 0 {
+				weighPerItem = 1
+			}
+
+			c.evictsCh <- c.evictBatch(ctx, key, (needEvictMemory/weighPerItem)+1)
+		}()
+	default:
+		// max number of evictors reached
+		// skip creation of new one
 	}
-
-	weighPerItem := mem / length
-	if weighPerItem == 0 {
-		weighPerItem = 1
-	}
-
-	c.evictsCh <- c.evictBatch(ctx, key, (needEvictMemory/weighPerItem)+1)
 }
 
 func (c *LRUAlgo) evictBatch(ctx context.Context, shardKey uint, num int) int {
