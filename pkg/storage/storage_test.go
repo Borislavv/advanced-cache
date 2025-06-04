@@ -9,22 +9,8 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/mock"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/cache"
-	"github.com/joho/godotenv"
 	"github.com/rs/zerolog/log"
-	"github.com/spf13/viper"
 )
-
-func init() {
-	_ = godotenv.Load()
-	viper.AutomaticEnv()
-	_ = viper.BindEnv("INIT_STORAGE_LEN_PER_SHARD")
-	_ = viper.BindEnv("EVICTION_ALGO")
-	_ = viper.BindEnv("MEMORY_FILL_THRESHOLD")
-	_ = viper.BindEnv("MEMORY_LIMIT")
-	_ = viper.BindEnv("REVALIDATE_BETA")
-	_ = viper.BindEnv("REVALIDATE_INTERVAL")
-	_ = viper.BindEnv("SEO_URL")
-}
 
 var BenchmarkReadFromStorageNum int
 

@@ -15,8 +15,13 @@ import (
 )
 
 func init() {
-	_ = godotenv.Load()
+	if err := godotenv.Overload(".env.local", ".env"); err != nil {
+		panic(err)
+	}
+
 	viper.AutomaticEnv()
+	_ = viper.BindEnv("APP_ENV")
+	_ = viper.BindEnv("APP_DEBUG")
 	_ = viper.BindEnv("INIT_STORAGE_LEN_PER_SHARD")
 	_ = viper.BindEnv("EVICTION_ALGO")
 	_ = viper.BindEnv("MEMORY_FILL_THRESHOLD")

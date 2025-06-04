@@ -17,6 +17,10 @@ const (
 	maxEvictors = 12
 )
 
+var (
+	evictsCh chan int
+)
+
 type OrderedList struct {
 	mu *sync.Mutex
 	*list.List
@@ -34,7 +38,6 @@ type LRUAlgo struct {
 
 	shardedMap        *sharded.Map[uint64, *model.Response]
 	activeEvictorsCh  chan struct{}
-	evictsCh          chan int
 	evictionThreshold uintptr
 
 	// list from newest to oldest
@@ -47,35 +50,44 @@ func NewLRU(ctx context.Context, cfg *config.Config) *LRUAlgo {
 		shardedMap:        sharded.NewMap[uint64, *model.Response](cfg.InitStorageLengthPerShard),
 		evictionThreshold: uintptr(math.Round(cfg.MemoryLimit * cfg.MemoryFillThreshold)),
 		activeEvictorsCh:  make(chan struct{}, maxEvictors),
-		evictsCh:          make(chan int, maxEvictors),
 	}
 
 	for i := 0; i < sharded.ShardCount; i++ {
 		lru.shardedOrderedList[i] = NewOrderedList()
 	}
 
-	go lru.logStatInfo(ctx)
+	if lru.isDebuggingEnabled() {
+		lru.runLogDebugInfo(ctx)
+	}
 
 	return lru
 }
 
-func (c *LRUAlgo) logStatInfo(ctx context.Context) {
-	evictsPer3Secs := 0
-	t := utils.NewTicker(ctx, time.Second*5)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case evictsPerIter := <-c.evictsCh:
-			evictsPer3Secs += evictsPerIter
-		case <-t:
-			log.Info().Msgf(
-				"LRU: evicted %d items at the last 5 seconds. Stat: memory usage: %s, storage len: %d.",
-				evictsPer3Secs, utils.FmtMem(c.shardedMap.Mem()), c.shardedMap.Len(),
-			)
-			evictsPer3Secs = 0
+func (c *LRUAlgo) isDebuggingEnabled() bool {
+	return c.cfg.IsDebugOn()
+}
+
+func (c *LRUAlgo) runLogDebugInfo(ctx context.Context) {
+	evictsCh = make(chan int, maxEvictors)
+
+	go func() {
+		evictsPer3Secs := 0
+		t := utils.NewTicker(ctx, time.Second*5)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case evictsPerIter := <-evictsCh:
+				evictsPer3Secs += evictsPerIter
+			case <-t:
+				log.Debug().Msgf(
+					"[lru]: evicted %d (5sec), memory usage: %s, storage len: %d.",
+					evictsPer3Secs, utils.FmtMem(c.shardedMap.Mem()), c.shardedMap.Len(),
+				)
+				evictsPer3Secs = 0
+			}
 		}
-	}
+	}()
 }
 
 func (c *LRUAlgo) Get(ctx context.Context, req *model.Request) (resp *model.Response, found bool) {
@@ -141,7 +153,11 @@ func (c *LRUAlgo) evict(ctx context.Context, key uint) {
 				weighPerItem = 1
 			}
 
-			c.evictsCh <- c.evictBatch(ctx, key, (needEvictMemory/weighPerItem)+1)
+			evicted := c.evictBatch(ctx, key, (needEvictMemory/weighPerItem)+1)
+
+			if c.isDebuggingEnabled() {
+				evictsCh <- evicted
+			}
 		}()
 	default:
 		// max number of evictors reached
