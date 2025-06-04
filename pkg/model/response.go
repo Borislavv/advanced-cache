@@ -133,8 +133,9 @@ func (r *Response) GetRevalidatedAt() time.Time {
 	return time.Unix(0, r.revalidatedAt.Load())
 }
 func (r *Response) Size() uintptr {
-	var size = 80
+	var size = 80 // resp struct fields weight
 
+	// calc dynamic resp fields weight
 	data := r.data.Load()
 	if data != nil {
 		for key, values := range data.headers {
@@ -144,23 +145,19 @@ func (r *Response) Size() uintptr {
 			}
 		}
 		size += len(data.body)
-		// statusCode: 4 bytes (int)
-		size += 4
 	}
 
+	// calc dynamic req fields weight
 	req := r.GetRequest()
 	if req != nil {
+		size += 136 // req struct fields weight
 		size += len(req.project)
 		size += len(req.domain)
 		size += len(req.language)
 		for _, tag := range req.tags {
 			size += len(tag)
 		}
-		size += 24 // tags field is slice
-		size += len(req.uniqueQuery)
-		size += 8 // req.uniqueKey: 8 bytes (uint64)
 	}
-	size += 47 // data, revalidatedAt, revalidateBeta, cfg, listElem,
 
 	return uintptr(size)
 }
