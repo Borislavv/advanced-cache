@@ -154,8 +154,8 @@ func (t *Balancer) mostLoadedList(n uintptr) []*node {
 
 	i := 0
 	for front := t.memList.Front(); front != nil; front = front.Next() {
-		if i > 100 {
-			panic("")
+		if i >= int(n) {
+			return shards
 		}
 		curNode := front.Value.(*node)
 		shards = append(shards, curNode)
