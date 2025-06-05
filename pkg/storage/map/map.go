@@ -5,10 +5,10 @@ import (
 	"hash"
 	"hash/fnv"
 	"sync"
-	"sync/atomic"
+	"unsafe"
 )
 
-const ShardCount = 2048
+const ShardCount = 32
 
 type Sizer interface {
 	Size() uintptr
@@ -16,148 +16,154 @@ type Sizer interface {
 
 type (
 	Map[K comparable, V Sizer] struct {
-		len        *atomic.Int64
-		mem        *atomic.Uintptr
-		shards     [ShardCount]*shard[K, V]
-		hasherPool *sync.Pool // pool of hash/fnv (hash.Hash64)
-	}
-
-	shard[K comparable, V Sizer] struct {
-		items map[K]V
-		sync.RWMutex
+		hasherPool  *sync.Pool // pool of hash/fnv (hash.Hash64)
+		arrBytePool *sync.Pool // pool of [8]byte
+		shards      [ShardCount]*Shard[K, V]
 	}
 )
 
 func NewMap[K comparable, V Sizer](defaultLen int) *Map[K, V] {
 	m := &Map[K, V]{
-		len: &atomic.Int64{},
-		mem: &atomic.Uintptr{},
 		hasherPool: &sync.Pool{
 			New: func() any { return fnv.New64a() },
 		},
+		arrBytePool: &sync.Pool{
+			New: func() any { return [8]byte{} },
+		},
 	}
-	for i := 0; i < ShardCount; i++ {
-		m.shards[i] = &shard[K, V]{items: make(map[K]V, defaultLen)}
+	for id := 0; id < ShardCount; id++ {
+		m.shards[id] = NewShard[K, V](id, defaultLen)
 	}
 	return m
 }
 
-func (m *Map[K, V]) GetShardKey(key K) uint {
-	h := m.hasherPool.Get().(hash.Hash64)
+func (smap *Map[K, V]) GetShardKey(key K) uint {
+	h := smap.hasherPool.Get().(hash.Hash64)
 	defer func() {
 		h.Reset()
-		m.hasherPool.Put(h)
+		smap.hasherPool.Put(h)
 	}()
-	_, _ = h.Write(m.key(key))
+	_, _ = h.Write(smap.key(key))
 	return uint(h.Sum64()) % ShardCount
 }
 
-// getShardByKey - searches shard by its own key.
-func (m *Map[K, V]) getShardByKey(key uint) *shard[K, V] {
-	return m.shards[key]
+// getShardByKey - searches Shard by its own key.
+func (smap *Map[K, V]) getShardByKey(key uint) *Shard[K, V] {
+	return smap.shards[key]
 }
 
-// getShard - searches shard by request unique key.
-func (m *Map[K, V]) getShard(key K) *shard[K, V] {
-	h := m.hasherPool.Get().(hash.Hash64)
+// getShard - searches Shard by request unique key.
+func (smap *Map[K, V]) getShard(key K) *Shard[K, V] {
+	h := smap.hasherPool.Get().(hash.Hash64)
 	defer func() {
 		h.Reset()
-		m.hasherPool.Put(h)
+		smap.hasherPool.Put(h)
 	}()
-	_, _ = h.Write(m.key(key))
-	return m.shards[uint(h.Sum64())%ShardCount]
+	_, _ = h.Write(smap.key(key))
+	return smap.shards[uint(h.Sum64())%ShardCount]
 }
 
-func (m *Map[K, V]) Set(key K, value V) {
-	m.len.Add(1)
-	m.mem.Add(value.Size())
-	s := m.getShard(key)
-	s.Lock()
-	s.items[key] = value
-	s.Unlock()
+func (smap *Map[K, V]) Set(key K, value V) {
+	smap.getShard(key).Set(key, value)
 }
 
-func (m *Map[K, V]) Get(key K, shardKey uint) (value V, found bool) {
-	s := m.getShardByKey(shardKey)
-	s.RLock()
-	v, ok := s.items[key]
-	s.RUnlock()
-	return v, ok
+func (smap *Map[K, V]) Get(key K, shardKey uint) (value V, found bool) {
+	return smap.getShardByKey(shardKey).Get(key)
 }
 
-func (m *Map[K, V]) Del(key K) (value V, found bool) {
-	s := m.getShard(key)
-	s.Lock()
-	v, f := s.items[key]
-	if f {
-		delete(s.items, key)
-		m.mem.Add(-v.Size())
-		m.len.Add(-1)
+func (smap *Map[K, V]) Del(key K) (value V, found bool) {
+	return smap.getShard(key).Del(key)
+}
+
+func (shard *Shard[K, V]) Walk(fn func(K, V), lockWrite bool) {
+	if lockWrite {
+		shard.Lock()
+		defer shard.Unlock()
+	} else {
+		shard.RLock()
+		defer shard.RUnlock()
 	}
-	s.Unlock()
-	return v, f
+
+	for k, v := range shard.items {
+		fn(k, v)
+	}
 }
 
-func (m *Map[K, V]) Has(key K) bool {
-	s := m.getShard(key)
-	s.RLock()
-	_, ok := s.items[key]
-	s.RUnlock()
-	return ok
+func (smap *Map[K, V]) Shard(key uint) *Shard[K, V] {
+	return smap.shards[key]
 }
 
-func (m *Map[K, V]) Rng(fn func(K, V)) {
+func (smap *Map[K, V]) Walk(fn func(K, V), lockWrite bool) {
 	var wg sync.WaitGroup
 	wg.Add(ShardCount)
-	for _, s := range m.shards {
-		go func(s *shard[K, V]) {
+	defer wg.Wait()
+	for key, shard := range smap.shards {
+		go func(k int, s *Shard[K, V]) {
 			defer wg.Done()
-			defer s.RUnlock()
-			s.RLock()
-			for k, v := range s.items {
-				fn(k, v)
-			}
-		}(s)
+			shard.Walk(fn, lockWrite)
+		}(key, shard)
 	}
-	wg.Wait()
 }
 
-func (m *Map[K, V]) Mem() uintptr {
-	return m.mem.Load()
+func (smap *Map[K, V]) WalkShards(fn func(key int, shard *Shard[K, V])) {
+	var wg sync.WaitGroup
+	wg.Add(ShardCount)
+	defer wg.Wait()
+	for k, s := range smap.shards {
+		go func(key int, shard *Shard[K, V]) {
+			defer wg.Done()
+			fn(key, shard)
+		}(k, s)
+	}
 }
 
-func (m *Map[K, V]) Len() int64 {
-	return m.len.Load()
+func (smap *Map[K, V]) Mem() uintptr {
+	var mem uintptr
+	for _, shard := range smap.shards {
+		mem += shard.mem.Load()
+	}
+	return unsafe.Sizeof(smap) + mem
 }
 
-func (m *Map[K, V]) key(key any) []byte {
+func (smap *Map[K, V]) Len() int64 {
+	var length int64
+	for _, shard := range smap.shards {
+		length += shard.Len.Load()
+	}
+	return length
+}
+
+func (smap *Map[K, V]) key(key any) []byte {
+	var buf [8]byte
+
+	buf, ok := smap.arrBytePool.Get().([8]byte)
+	if !ok {
+		panic("arrBytePool must contains only [8]byte")
+	}
+	defer smap.arrBytePool.Put(buf)
+
+	bufSl := buf[:]
 	switch x := key.(type) {
 	case string:
 		return []byte(x)
 	case int:
-		buf := make([]byte, 8)
-		binary.LittleEndian.PutUint64(buf, uint64(x))
-		return buf
+		binary.LittleEndian.PutUint64(bufSl, uint64(x))
+		return bufSl
 	case int64:
-		buf := make([]byte, 8)
-		binary.LittleEndian.PutUint64(buf, uint64(x))
-		return buf
+		binary.LittleEndian.PutUint64(bufSl, uint64(x))
+		return bufSl
 	case int32:
-		buf := make([]byte, 8)
-		binary.LittleEndian.PutUint64(buf, uint64(x))
-		return buf
+		binary.LittleEndian.PutUint64(bufSl, uint64(x))
+		return bufSl
 	case uint:
-		buf := make([]byte, 8)
-		binary.LittleEndian.PutUint64(buf, uint64(x))
-		return buf
+		binary.LittleEndian.PutUint64(bufSl, uint64(x))
+		return bufSl
 	case uintptr:
-		buf := make([]byte, 8)
-		binary.LittleEndian.PutUint64(buf, uint64(x))
-		return buf
+		binary.LittleEndian.PutUint64(bufSl, uint64(x))
+		return bufSl
 	case uint64:
-		buf := make([]byte, 8)
-		binary.LittleEndian.PutUint64(buf, x)
-		return buf
+		binary.LittleEndian.PutUint64(bufSl, x)
+		return bufSl
 	case float64:
 		panic("float is not available")
 	case float32:

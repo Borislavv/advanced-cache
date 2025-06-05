@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/cache/lru"
 
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
@@ -22,7 +23,7 @@ func New(ctx context.Context, cfg *config.Config) *AlgoStorage {
 	var s Storage
 	switch cache.Algorithm(cfg.EvictionAlgo) {
 	case cache.LRU:
-		s = cache.NewLRU(ctx, cfg)
+		s = lru.NewLRU(ctx, cfg, lru.NewBalancer())
 	default:
 		panic("algorithm " + cfg.EvictionAlgo + " does not implemented yet")
 	}

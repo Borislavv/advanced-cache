@@ -10,6 +10,7 @@ import (
 	"gitlab.xbet.lan/v3group/backend/packages/go/graceful-shutdown/pkg/shutdown"
 	"gitlab.xbet.lan/v3group/backend/packages/go/liveness-prober"
 	"go.uber.org/automaxprocs/maxprocs"
+	//_ "net/http/pprof"
 	"runtime"
 	"time"
 )
@@ -35,6 +36,10 @@ func init() {
 	_ = viper.BindEnv("SERVER_REQUEST_TIMEOUT")
 	_ = viper.BindEnv("IS_PROMETHEUS_METRICS_ENABLED")
 	_ = viper.BindEnv("LIVENESS_PROBE_FAILED_TIMEOUT")
+
+	//go func() {
+	//	_ = http.ListenAndServe("localhost:6060", nil)
+	//}()
 }
 
 func setMaxProcs() {

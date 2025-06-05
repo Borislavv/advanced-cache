@@ -105,6 +105,7 @@ func (c *CacheController) Index(r *fasthttp.RequestCtx) {
 
 	if c.cfg.IsDebugOn() {
 		durCh <- time.Since(f)
+		//log.Info().Msgf("Cache Index took %v", time.Since(f))
 	}
 }
 
