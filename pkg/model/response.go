@@ -7,7 +7,7 @@ import (
 	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
 	"github.com/rs/zerolog/log"
 	"math"
-	"math/rand"
+	"math/rand/v2"
 	"net/http"
 	"sync/atomic"
 	"time"
@@ -81,6 +81,7 @@ func NewResponse(
 	}
 	if resp.revalidatedAt == nil {
 		resp.revalidatedAt = &atomic.Int64{}
+		resp.revalidatedAt.Store(time.Now().UnixNano())
 	}
 	if resp.listElement == nil {
 		resp.listElement = &atomic.Pointer[list.Element[*Request]]{}
@@ -96,16 +97,6 @@ func NewResponse(
 	return resp, nil
 }
 
-func (r *Response) Revalidate(ctx context.Context) {
-	data, err := r.revalidator(ctx)
-	if err != nil {
-		log.Err(err).Msg("error occurred while revalidating item")
-		return
-	}
-	r.data.Store(data)
-	r.revalidatedAt.Store(time.Now().UnixNano())
-}
-
 func (r *Response) ShouldBeRevalidated(source *Response) bool {
 	if source != nil {
 		return false
@@ -118,6 +109,17 @@ func (r *Response) ShouldBeRevalidated(source *Response) bool {
 		return true
 	}
 	return rand.Float64() >= math.Exp(-r.cfg.RevalidateBeta*float64(age)/float64(r.cfg.RevalidateInterval))
+}
+
+func (r *Response) Revalidate(ctx context.Context) {
+	data, err := r.revalidator(ctx)
+	if err != nil {
+		log.Err(err).Msg("error occurred while revalidating item")
+		return
+	}
+	r.data.Store(data)
+	r.revalidatedAt.Store(time.Now().UnixNano())
+	log.Info().Msg("revalidated")
 }
 
 func (r *Response) GetRequest() *Request {
