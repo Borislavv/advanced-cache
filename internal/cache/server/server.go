@@ -7,6 +7,7 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/internal/cache/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/repository"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage"
+	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
 	"github.com/rs/zerolog/log"
 	"gitlab.xbet.lan/v3group/backend/packages/go/httpserver/pkg/httpserver"
 	"gitlab.xbet.lan/v3group/backend/packages/go/httpserver/pkg/httpserver/controller"
@@ -42,6 +43,7 @@ func New(
 	cfg *config.Config,
 	cache storage.Storage,
 	seoRepo repository.Seo,
+	reader synced.PooledReader,
 ) (*HttpServer, error) {
 	var err error
 
@@ -64,7 +66,7 @@ func New(
 		return nil, errors.New(MetricsInitFailedErrorMessage)
 	}
 
-	if err = srv.initServer(cache, seoRepo); err != nil {
+	if err = srv.initServer(cache, seoRepo, reader); err != nil {
 		log.Err(err).Msg("server init. failed")
 		return nil, errors.New(InitFailedErrorMessage)
 	}
@@ -123,11 +125,11 @@ func (s *HttpServer) initMetrics() error {
 	return nil
 }
 
-func (s *HttpServer) initServer(cache storage.Storage, seoRepo repository.Seo) error {
+func (s *HttpServer) initServer(cache storage.Storage, seoRepo repository.Seo, reader synced.PooledReader) error {
 	ctx, cancel := context.WithCancel(s.ctx)
 	s.cancel = cancel
 
-	if server, err := httpserver.New(ctx, s.cfg, s.controllers(cache, seoRepo), s.middlewares()); err != nil {
+	if server, err := httpserver.New(ctx, s.cfg, s.controllers(cache, seoRepo, reader), s.middlewares()); err != nil {
 		cancel()
 		log.Err(err).Msg(InitFailedErrorMessage)
 		return errors.New(InitFailedErrorMessage)
@@ -139,9 +141,9 @@ func (s *HttpServer) initServer(cache storage.Storage, seoRepo repository.Seo) e
 }
 
 // controllers returns a slice of server.HttpController[s] for http server (handlers).
-func (s *HttpServer) controllers(cache storage.Storage, seoRepo repository.Seo) []controller.HttpController {
+func (s *HttpServer) controllers(cache storage.Storage, seoRepo repository.Seo, reader synced.PooledReader) []controller.HttpController {
 	return []controller.HttpController{
-		api.NewCacheController(s.ctx, s.cfg, cache, seoRepo),
+		api.NewCacheController(s.ctx, s.cfg, cache, seoRepo, reader),
 	}
 }
 

@@ -1,37 +1,41 @@
 package model
 
 import (
-	"container/list"
 	"context"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/list"
+	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
 	"github.com/rs/zerolog/log"
 	"math"
 	"math/rand"
 	"net/http"
-	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 )
 
-var ResponsePool = &sync.Pool{
-	New: func() interface{} {
-		return &Response{}
-	},
-}
+const preallocation = 1000
+
+var ResponsePool = synced.NewBatchPool[*Response](preallocation, func() *Response {
+	return new(Response)
+})
 
 type ResponseRevalidator = func(ctx context.Context) (data *Data, err error)
 
 type Data struct {
-	headers    http.Header
 	statusCode int
-	body       []byte
+	headers    http.Header
+
+	body     []byte
+	freeBody synced.FreeResourceFunc
 }
 
-func NewData(statusCode int, headers http.Header, body []byte) *Data {
+func NewData(statusCode int, headers http.Header, body []byte, freeBody synced.FreeResourceFunc) *Data {
 	return &Data{
 		headers:    headers,
 		statusCode: statusCode,
 		body:       body,
+		freeBody:   freeBody,
 	}
 }
 
@@ -42,18 +46,16 @@ func (d *Data) Body() []byte         { return d.body }
 // Response weight is 80 bytes
 type Response struct {
 	/* mutable (pointer change but data are immutable) */
-	data atomic.Pointer[Data]
+	data *atomic.Pointer[Data]
 	/* mutable (pointer change but data are immutable) */
-	request atomic.Pointer[Request]
+	request *atomic.Pointer[Request]
 	/* mutable */
-	revalidatedAt atomic.Int64 // UnixNano
+	revalidatedAt *atomic.Int64 // UnixNano
 	/* mutable */
-	listElement atomic.Pointer[list.Element]
+	listElement *atomic.Pointer[list.Element[*Request]]
 
 	/* immutable */
-	shardKey atomic.Uint32
-	/* immutable */
-	tags [][]byte
+	shardKey *atomic.Uint32
 	/* immutable */
 	cfg *config.Config
 	/* immutable */
@@ -66,19 +68,31 @@ func NewResponse(
 	cfg *config.Config,
 	revalidator ResponseRevalidator,
 ) (*Response, error) {
-	resp, ok := ResponsePool.Get().(*Response)
-	if !ok {
-		panic("pool must contains only *model.Response")
-	}
+	resp := ResponsePool.Get()
+
 	if resp.cfg == nil {
 		resp.cfg = cfg
 	}
+	if resp.request == nil {
+		resp.request = &atomic.Pointer[Request]{}
+	}
+	if resp.data == nil {
+		resp.data = &atomic.Pointer[Data]{}
+	}
+	if resp.revalidatedAt == nil {
+		resp.revalidatedAt = &atomic.Int64{}
+	}
+	if resp.listElement == nil {
+		resp.listElement = &atomic.Pointer[list.Element[*Request]]{}
+	}
+	if resp.shardKey == nil {
+		resp.shardKey = &atomic.Uint32{}
+	}
+
+	resp.data.Store(data)
 	resp.request.Store(req)
 	resp.revalidator = revalidator
-	resp.tags = req.GetTags()
-	resp.data.Store(data)
-	resp.revalidatedAt.Store(time.Now().UnixNano())
-	resp.listElement.Store(nil)
+
 	return resp, nil
 }
 
@@ -92,7 +106,10 @@ func (r *Response) Revalidate(ctx context.Context) {
 	r.revalidatedAt.Store(time.Now().UnixNano())
 }
 
-func (r *Response) ShouldBeRevalidated() bool {
+func (r *Response) ShouldBeRevalidated(source *Response) bool {
+	if source != nil {
+		return false
+	}
 	age := time.Since(time.Unix(0, r.revalidatedAt.Load()))
 	if age < time.Duration(float64(r.cfg.RevalidateInterval)*r.cfg.RevalidateBeta) {
 		return false
@@ -107,11 +124,11 @@ func (r *Response) GetRequest() *Request {
 	return r.request.Load()
 }
 
-func (r *Response) GetListElement() *list.Element {
+func (r *Response) GetListElement() *list.Element[*Request] {
 	return r.listElement.Load()
 }
 
-func (r *Response) SetListElement(el *list.Element) {
+func (r *Response) SetListElement(el *list.Element[*Request]) {
 	r.listElement.Store(el)
 }
 
@@ -119,7 +136,7 @@ func (r *Response) GetShardKey() uint {
 	return uint(r.shardKey.Load())
 }
 
-func (r *Response) SetShardKey(shardKey uint) {
+func (r *Response) SetShardKey(shardKey int) {
 	r.shardKey.Store(uint32(shardKey))
 }
 
@@ -143,7 +160,7 @@ func (r *Response) GetRevalidatedAt() time.Time {
 	return time.Unix(0, r.revalidatedAt.Load())
 }
 func (r *Response) Size() uintptr {
-	var size = 80 // resp struct fields weight
+	var size = int(unsafe.Sizeof(r))
 
 	// calc dynamic resp fields weight
 	data := r.data.Load()
@@ -160,7 +177,7 @@ func (r *Response) Size() uintptr {
 	// calc dynamic req fields weight
 	req := r.GetRequest()
 	if req != nil {
-		size += 136 // req struct fields weight
+		size += int(unsafe.Sizeof(req))
 		size += len(req.project)
 		size += len(req.domain)
 		size += len(req.language)
@@ -170,4 +187,15 @@ func (r *Response) Size() uintptr {
 	}
 
 	return uintptr(size)
+}
+
+func (r *Response) Free() *Response {
+	r.data.Load().freeBody()
+	r.request.Load().Free()
+
+	r.revalidatedAt.Store(time.Now().UnixNano())
+	r.listElement.Store(nil)
+	r.shardKey.Store(0)
+
+	return r
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/repository"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage"
+	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
 	"github.com/fasthttp/router"
 	"github.com/rs/zerolog/log"
@@ -44,6 +45,7 @@ type CacheController struct {
 	ctx     context.Context
 	cache   storage.Storage
 	seoRepo repository.Seo
+	reader  synced.PooledReader
 }
 
 func NewCacheController(
@@ -51,12 +53,14 @@ func NewCacheController(
 	cfg *config.Config,
 	cache storage.Storage,
 	seoRepo repository.Seo,
+	reader synced.PooledReader,
 ) *CacheController {
 	c := &CacheController{
 		cfg:     cfg,
 		ctx:     ctx,
 		cache:   cache,
 		seoRepo: seoRepo,
+		reader:  reader,
 	}
 	if c.cfg.IsDebugOn() {
 		c.runLogDebugInfo(ctx)

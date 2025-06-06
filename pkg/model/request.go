@@ -3,36 +3,57 @@ package model
 import (
 	"bytes"
 	"errors"
+	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
 	"github.com/valyala/fasthttp"
 	"github.com/zeebo/xxh3"
 	"go.uber.org/atomic"
 	"sync"
 )
 
-const preallocatedQueryBufCapacity = 170 // for pre-allocated buffer for concat string literals and url
+const (
+	preallocatedBufferCapacity = 256 // for pre-allocated buffer for concat string literals and url
+	tagBufferCapacity          = 128
+	maxTagsLen                 = 10
+)
 
-var RequestsPool = sync.Pool{
-	New: func() interface{} {
+var hasherPool = synced.NewBatchPool[*xxh3.Hasher](synced.PreallocationBatchSize, func() *xxh3.Hasher {
+	return xxh3.New()
+})
+
+var (
+	RequestsPool = synced.NewBatchPool[*Request](synced.PreallocationBatchSize, func() *Request {
 		return &Request{}
-	},
-}
+	})
+	TagsSlicesPool = synced.NewBatchPool[[][]byte](synced.PreallocationBatchSize, func() [][]byte {
+		batch := make([][]byte, maxTagsLen)
+		for i := range batch {
+			batch[i] = make([]byte, 0, tagBufferCapacity)
+		}
+		return batch
+	})
+)
+
+type FreeResourceFunc func()
 
 type Request struct {
-	mu       *sync.RWMutex
-	project  []byte
-	domain   []byte
-	language []byte
-	tags     [][]byte
+	mu         *sync.RWMutex
+	project    []byte
+	domain     []byte
+	language   []byte
+	tags       [][]byte
+	freeTagsFn FreeResourceFunc
+
 	// calculated fields (calling while init.)
 	uniqueQuery []byte
 	uniqueKey   *atomic.Uint64
 }
 
 func NewRequest(q *fasthttp.Args) (*Request, error) {
-	return NewManualRequest(q.Peek("project[id]"), q.Peek("domain"), q.Peek("language"), ExtractTags(q))
+	tags, freeTagsFn := extractTags(q)
+	return NewManualRequest(q.Peek("project[id]"), q.Peek("domain"), q.Peek("language"), tags, freeTagsFn)
 }
 
-func NewManualRequest(project, domain, language []byte, tags [][]byte) (*Request, error) {
+func NewManualRequest(project, domain, language []byte, tags [][]byte, freeTagsFn FreeResourceFunc) (*Request, error) {
 	if project == nil || len(project) == 0 {
 		return nil, errors.New("project is not specified")
 	}
@@ -43,16 +64,10 @@ func NewManualRequest(project, domain, language []byte, tags [][]byte) (*Request
 		return nil, errors.New("language is not specified")
 	}
 
-	req, ok := RequestsPool.Get().(*Request)
-	if !ok {
-		panic("request pool must contains only *model.Request")
-	}
+	req := RequestsPool.Get()
 
 	if req.mu == nil {
 		req.mu = new(sync.RWMutex)
-	}
-	if req.uniqueQuery != nil {
-		req.uniqueQuery = req.uniqueQuery[:0]
 	}
 	if req.uniqueKey == nil {
 		req.uniqueKey = atomic.NewUint64(0)
@@ -62,27 +77,32 @@ func NewManualRequest(project, domain, language []byte, tags [][]byte) (*Request
 	req.domain = domain
 	req.language = language
 	req.tags = tags
-
-	req.warmUp()
+	req.freeTagsFn = freeTagsFn
 
 	return req, nil
 }
 
-// ExtractTags - returns a slice with []byte("${choice name}").
-func ExtractTags(args *fasthttp.Args) [][]byte {
+// extractTags - returns a slice with []byte("${choice name}").
+func extractTags(args *fasthttp.Args) ([][]byte, FreeResourceFunc) {
 	var (
 		nullValue   = []byte("null")
 		choiceValue = []byte("choice")
 	)
 
-	var tags [][]byte
+	tagsSls := TagsSlicesPool.Get()
+	for _, tagSl := range tagsSls {
+		tagSl = tagSl[:0]
+	}
+
+	i := 0
 	args.VisitAll(func(key, value []byte) {
 		if !bytes.HasPrefix(key, choiceValue) || bytes.Equal(value, nullValue) {
 			return
 		}
-		tags = append(tags, value)
+		tagsSls[i] = append(tagsSls[i], value...)
+		i++
 	})
-	return tags
+	return tagsSls, func() { TagsSlicesPool.Put(tagsSls) }
 }
 
 func (r *Request) GetProject() []byte {
@@ -98,8 +118,7 @@ func (r *Request) GetTags() [][]byte {
 	return r.tags
 }
 func (r *Request) UniqueKey() uint64 {
-	key := r.uniqueKey.Load()
-	if key != 0 {
+	if key := r.uniqueKey.Load(); key != 0 {
 		return key
 	}
 
@@ -108,16 +127,28 @@ func (r *Request) UniqueKey() uint64 {
 	for _, tag := range r.tags {
 		bufCap += len(tag)
 	}
+
 	// build unique buffer of request data
 	buf := make([]byte, 0, bufCap)
 	buf = append(buf, r.project...)
 	buf = append(buf, r.domain...)
 	buf = append(buf, r.language...)
 	for _, tag := range r.tags {
+		if len(tag) == 0 {
+			continue
+		}
 		buf = append(buf, tag...)
 	}
+
 	// calculate hash of unique []byte
-	key = xxh3.Hash(buf)
+	hasher := hasherPool.Get()
+	defer hasherPool.Put(hasher)
+	hasher.Reset()
+	if _, err := hasher.Write(buf); err != nil {
+		panic(err)
+	}
+
+	key := hasher.Sum64()
 	r.uniqueKey.Store(key)
 
 	return key
@@ -131,7 +162,7 @@ func (r *Request) ToQuery() []byte {
 		return uniqueQuery
 	}
 
-	bufCap := preallocatedQueryBufCapacity + len(r.project) + len(r.domain) + len(r.language)
+	bufCap := preallocatedBufferCapacity + len(r.project) + len(r.domain) + len(r.language)
 	for _, tag := range r.tags {
 		bufCap += len(tag)
 	}
@@ -145,16 +176,18 @@ func (r *Request) ToQuery() []byte {
 	buf = append(buf, r.language...)
 
 	var n int
-	var choiceArrBytes = []byte("[choice]")
 	for _, tag := range r.tags {
+		if len(tag) == 0 {
+			continue
+		}
 		buf = append(buf, []byte("&choice")...)
-		buf = append(buf, bytes.Repeat(choiceArrBytes, n)...)
+		buf = append(buf, bytes.Repeat([]byte("[choice]"), n)...)
 		buf = append(buf, []byte("[name]=")...)
 		buf = append(buf, tag...)
 		n++
 	}
 	buf = append(buf, []byte("&choice")...)
-	buf = append(buf, bytes.Repeat(choiceArrBytes, n)...)
+	buf = append(buf, bytes.Repeat([]byte("[choice]"), n)...)
 	buf = append(buf, []byte("=null")...)
 
 	r.mu.Lock()
@@ -164,8 +197,8 @@ func (r *Request) ToQuery() []byte {
 	return buf
 }
 
-func (r *Request) warmUp() *Request {
-	_ = r.ToQuery()
-	_ = r.UniqueKey()
-	return r
+func (r *Request) Free() {
+	r.freeTagsFn()
+	r.uniqueKey.Store(0)
+	r.uniqueQuery = r.uniqueQuery[:0]
 }

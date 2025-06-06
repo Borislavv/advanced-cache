@@ -5,13 +5,14 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/mock"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/cache"
-	"github.com/rs/zerolog/log"
 	"testing"
 	"time"
 )
 
 var (
 	cfg = &config.Config{
+		AppEnv:                    "dev",
+		AppDebug:                  true,
 		SeoUrl:                    "",
 		RevalidateBeta:            0.3,
 		RevalidateInterval:        time.Hour,
@@ -20,20 +21,18 @@ var (
 		MemoryFillThreshold:       1,
 		MemoryLimit:               1024 * 100, // 100kb
 	}
-	balancer  = NewBalancer()
-	lru       = NewLRU(context.Background(), cfg, balancer)
-	responses = mock.GenerateRandomResponses(cfg, 1000)
+	lru       = NewLRU(context.Background(), cfg)
+	responses = mock.GenerateRandomResponses(cfg, 1000000)
 )
 
 func TestSwap(t *testing.T) {
 	for _, resp := range responses {
 		lru.Set(resp)
 	}
-
-	cur := balancer.memList.Front()
-	for cur != nil {
-		s := cur.Value.(*node).shard
-		log.Info().Msgf("shard id: %d, shard len: %d, shard mem: %d", s.ID(), s.Len.Load(), s.Size())
-		cur = cur.Next()
-	}
+	ch := make(chan struct{})
+	go func() {
+		time.Sleep(time.Second * 2)
+		ch <- struct{}{}
+	}()
+	<-ch
 }

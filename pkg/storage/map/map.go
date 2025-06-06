@@ -1,78 +1,51 @@
 package sharded
 
 import (
-	"encoding/binary"
-	"hash"
-	"hash/fnv"
 	"sync"
 	"unsafe"
 )
 
-const ShardCount = 32
+const (
+	ShardCount          = 32
+	PreallocateSyncPool = 1000
+)
+
+type Keyer interface {
+	~int | ~int8 | ~int16 | ~int32 | ~int64 | ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | uintptr
+}
 
 type Sizer interface {
 	Size() uintptr
 }
 
 type (
-	Map[K comparable, V Sizer] struct {
-		hasherPool  *sync.Pool // pool of hash/fnv (hash.Hash64)
-		arrBytePool *sync.Pool // pool of [8]byte
-		shards      [ShardCount]*Shard[K, V]
+	Map[K Keyer, V Sizer] struct {
+		shards [ShardCount]*Shard[K, V]
 	}
 )
 
-func NewMap[K comparable, V Sizer](defaultLen int) *Map[K, V] {
-	m := &Map[K, V]{
-		hasherPool: &sync.Pool{
-			New: func() any { return fnv.New64a() },
-		},
-		arrBytePool: &sync.Pool{
-			New: func() any { return [8]byte{} },
-		},
-	}
+func NewMap[K Keyer, V Sizer](defaultLen int) *Map[K, V] {
+	m := &Map[K, V]{}
 	for id := 0; id < ShardCount; id++ {
 		m.shards[id] = NewShard[K, V](id, defaultLen)
 	}
 	return m
 }
 
-func (smap *Map[K, V]) GetShardKey(key K) uint {
-	h := smap.hasherPool.Get().(hash.Hash64)
-	defer func() {
-		h.Reset()
-		smap.hasherPool.Put(h)
-	}()
-	_, _ = h.Write(smap.key(key))
-	return uint(h.Sum64()) % ShardCount
-}
-
-// getShardByKey - searches Shard by its own key.
-func (smap *Map[K, V]) getShardByKey(key uint) *Shard[K, V] {
-	return smap.shards[key]
-}
-
-// getShard - searches Shard by request unique key.
-func (smap *Map[K, V]) getShard(key K) *Shard[K, V] {
-	h := smap.hasherPool.Get().(hash.Hash64)
-	defer func() {
-		h.Reset()
-		smap.hasherPool.Put(h)
-	}()
-	_, _ = h.Write(smap.key(key))
-	return smap.shards[uint(h.Sum64())%ShardCount]
+func (smap *Map[K, V]) GetShardKey(key K) K {
+	return key % ShardCount
 }
 
 func (smap *Map[K, V]) Set(key K, value V) {
-	smap.getShard(key).Set(key, value)
+	smap.Shard(key).Set(key, value)
 }
 
-func (smap *Map[K, V]) Get(key K, shardKey uint) (value V, found bool) {
-	return smap.getShardByKey(shardKey).Get(key)
+func (smap *Map[K, V]) Get(key K, shardKey K) (value V, found bool) {
+	return smap.shards[shardKey].Get(key)
 }
 
 func (smap *Map[K, V]) Del(key K) (value V, found bool) {
-	return smap.getShard(key).Del(key)
+	return smap.Shard(key).Del(key)
 }
 
 func (shard *Shard[K, V]) Walk(fn func(K, V), lockWrite bool) {
@@ -83,14 +56,13 @@ func (shard *Shard[K, V]) Walk(fn func(K, V), lockWrite bool) {
 		shard.RLock()
 		defer shard.RUnlock()
 	}
-
 	for k, v := range shard.items {
 		fn(k, v)
 	}
 }
 
-func (smap *Map[K, V]) Shard(key uint) *Shard[K, V] {
-	return smap.shards[key]
+func (smap *Map[K, V]) Shard(key K) *Shard[K, V] {
+	return smap.shards[smap.GetShardKey(key)]
 }
 
 func (smap *Map[K, V]) Walk(fn func(K, V), lockWrite bool) {
@@ -131,46 +103,4 @@ func (smap *Map[K, V]) Len() int64 {
 		length += shard.Len.Load()
 	}
 	return length
-}
-
-func (smap *Map[K, V]) key(key any) []byte {
-	var buf [8]byte
-
-	buf, ok := smap.arrBytePool.Get().([8]byte)
-	if !ok {
-		panic("arrBytePool must contains only [8]byte")
-	}
-	defer smap.arrBytePool.Put(buf)
-
-	bufSl := buf[:]
-	switch x := key.(type) {
-	case string:
-		return []byte(x)
-	case int:
-		binary.LittleEndian.PutUint64(bufSl, uint64(x))
-		return bufSl
-	case int64:
-		binary.LittleEndian.PutUint64(bufSl, uint64(x))
-		return bufSl
-	case int32:
-		binary.LittleEndian.PutUint64(bufSl, uint64(x))
-		return bufSl
-	case uint:
-		binary.LittleEndian.PutUint64(bufSl, uint64(x))
-		return bufSl
-	case uintptr:
-		binary.LittleEndian.PutUint64(bufSl, uint64(x))
-		return bufSl
-	case uint64:
-		binary.LittleEndian.PutUint64(bufSl, x)
-		return bufSl
-	case float64:
-		panic("float is not available")
-	case float32:
-		panic("float is not available")
-	case bool:
-		panic("bool is not available")
-	default:
-		panic("unsupported key type")
-	}
 }

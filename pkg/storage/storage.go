@@ -12,7 +12,6 @@ import (
 type Storage interface {
 	Get(req *model.Request) (resp *model.Response, found bool)
 	Set(resp *model.Response)
-	Del(req *model.Request)
 }
 
 type AlgoStorage struct {
@@ -23,7 +22,7 @@ func New(ctx context.Context, cfg *config.Config) *AlgoStorage {
 	var s Storage
 	switch cache.Algorithm(cfg.EvictionAlgo) {
 	case cache.LRU:
-		s = lru.NewLRU(ctx, cfg, lru.NewBalancer())
+		s = lru.NewLRU(ctx, cfg)
 	default:
 		panic("algorithm " + cfg.EvictionAlgo + " does not implemented yet")
 	}

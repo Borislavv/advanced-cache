@@ -39,6 +39,7 @@ func GenerateRandomRequests(num int) []*model.Request {
 						[]byte(`betting_null_sport_` + strconv.Itoa(i) + `_` + strconv.Itoa(i*i)),
 						[]byte(`betting_null_sport_` + strconv.Itoa(i) + `_` + strconv.Itoa(i*i) + `_` + strconv.Itoa(projectID*i)),
 					},
+					func() {},
 				)
 				if err != nil {
 					panic(err)
@@ -59,7 +60,7 @@ func GenerateRandomResponses(cfg *config.Config, num int) []*model.Response {
 
 	list := make([]*model.Response, 0, num)
 	for _, req := range GenerateRandomRequests(num) {
-		data := model.NewData(200, headers, []byte(GenerateRandomString()))
+		data := model.NewData(200, headers, []byte(GenerateRandomString()), func() {})
 		resp, err := model.NewResponse(data, req, cfg, func(ctx context.Context) (data *model.Data, err error) {
 			return data, nil
 		})

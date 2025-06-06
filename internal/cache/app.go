@@ -6,10 +6,13 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/internal/cache/server"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/repository"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage"
+	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
 	"github.com/rs/zerolog/log"
 	"gitlab.xbet.lan/v3group/backend/packages/go/graceful-shutdown/pkg/shutdown"
 	"gitlab.xbet.lan/v3group/backend/packages/go/liveness-prober"
 )
+
+const syncPoolPreallocation = 1000
 
 type App interface {
 	Start()
@@ -28,7 +31,11 @@ func NewApp(ctx context.Context, cfg *config.Config, probe liveness.Prober) (*Ca
 	_ = cancel
 
 	cacheCfg := &cfg.Config
-	if srv, err := server.New(ctx, cfg, storage.New(ctx, cacheCfg), repository.NewSeo(cacheCfg)); err != nil {
+	store := storage.New(ctx, cacheCfg)
+	reader := synced.NewPooledResponseReader(syncPoolPreallocation)
+	repo := repository.NewSeo(cacheCfg, reader)
+
+	if srv, err := server.New(ctx, cfg, store, repo, reader); err != nil {
 		return nil, err
 	} else {
 		return &Cache{ctx: ctx, cancel: cancel, cfg: cfg, probe: probe, server: srv}, nil

@@ -1,53 +1,42 @@
 package lru
 
 import (
-	"container/list"
 	"context"
-	"sync"
-
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/list"
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
 )
 
-type node struct {
-	mu          sync.Mutex
-	lruList     *list.List // array of items lists with sort "from newest to oldest"
-	memListElem *list.Element
+type shardNode struct {
+	lruList     *list.List[*model.Request] // less used starts at the back
+	memListElem *list.Element[*shardNode]
 	shard       *sharded.Shard[uint64, *model.Response]
 }
 
 type Balancer struct {
-	mu         sync.RWMutex
-	memList    *list.List // shards sorted from most loaded  by memory to lower loaded
-	shards     [sharded.ShardCount]*node
+	shards     [sharded.ShardCount]*shardNode
+	memList    *list.List[*shardNode] // more loaded starts at the front
 	shardedMap *sharded.Map[uint64, *model.Response]
 }
 
-func NewBalancer() *Balancer {
+func NewBalancer(shardedMap *sharded.Map[uint64, *model.Response]) *Balancer {
 	return &Balancer{
-		mu:      sync.RWMutex{},
-		memList: list.New(),
+		memList:    list.New[*shardNode](),
+		shardedMap: shardedMap,
 	}
 }
 
 func (t *Balancer) register(shard *sharded.Shard[uint64, *model.Response]) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	n := &node{
+	n := &shardNode{
 		shard:   shard,
-		lruList: list.New(),
+		lruList: list.New[*model.Request](),
 	}
 
-	el := t.memList.PushBack(n)
+	n.memListElem = t.memList.PushBack(n)
 	t.shards[shard.ID()] = n
-
-	n.mu.Lock()
-	n.memListElem = el
-	n.mu.Unlock()
 }
 
-func (t *Balancer) set(resp *model.Response) *list.Element {
+func (t *Balancer) set(resp *model.Response) *list.Element[*model.Request] {
 	n := t.shards[resp.GetShardKey()]
 	if n == nil {
 		return nil
@@ -59,131 +48,99 @@ func (t *Balancer) set(resp *model.Response) *list.Element {
 	return el
 }
 
-func (t *Balancer) push(n *node, resp *model.Response) *list.Element {
-	n.mu.Lock()
-	defer n.mu.Unlock()
+func (t *Balancer) push(n *shardNode, resp *model.Response) *list.Element[*model.Request] {
 	el := n.lruList.PushFront(resp.GetRequest())
 	resp.SetListElement(el)
 	return el
 }
 
-func (t *Balancer) rebalance(n *node) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	n.mu.Lock()
+func (t *Balancer) rebalance(n *shardNode) {
 	curr := n.memListElem
-	n.mu.Unlock()
 	if curr == nil {
 		return
 	}
-	curSize := curr.Value.(*node).shard.Size()
+	curSize := curr.Value.shard.Size()
 	for prev := curr.Prev(); prev != nil; prev = curr.Prev() {
-		if curSize <= prev.Value.(*node).shard.Size() {
+		if curSize <= prev.Value.shard.Size() {
 			break
 		}
-		t.swap(curr, prev)
+		t.memList.SwapValues(curr, prev)
 		curr = prev
 	}
 	for next := curr.Next(); next != nil; next = curr.Next() {
-		if curSize >= next.Value.(*node).shard.Size() {
+		if curSize >= next.Value.shard.Size() {
 			break
 		}
-		t.swap(curr, next)
+		t.memList.SwapValues(curr, next)
 		curr = next
 	}
 }
 
-func (t *Balancer) move(shardID uint, el *list.Element) {
-	n := t.shards[shardID]
+func (t *Balancer) move(shardKey uint64, el *list.Element[*model.Request]) {
+	n := t.shards[shardKey]
 	if n == nil {
 		return
 	}
 
-	n.mu.Lock()
 	n.lruList.MoveToFront(el)
-	n.mu.Unlock()
 }
 
-func (t *Balancer) swap(a, b *list.Element) {
-	t.memList.MoveBefore(a, b)
-	aNode := a.Value.(*node)
-	bNode := b.Value.(*node)
-
-	aNode.mu.Lock()
-	aNode.memListElem = a
-	aNode.mu.Unlock()
-
-	bNode.mu.Lock()
-	bNode.memListElem = b
-	bNode.mu.Unlock()
+func (t *Balancer) swap(a, b *list.Element[*shardNode]) {
+	t.memList.SwapValues(a, b)
 }
 
-func (t *Balancer) remove(key uint64, sharedKey uint) {
-	n := t.shards[sharedKey]
+func (t *Balancer) remove(key uint64, shardKey uint64) (*model.Response, bool) {
+	n := t.shards[shardKey]
 
 	resp, found := t.shardedMap.Del(key)
 	if !found {
-		return
+		return nil, false
 	}
 
 	t.del(n, resp)
 	t.rebalance(n)
+
+	return resp, true
 }
 
-func (t *Balancer) del(n *node, resp *model.Response) {
-	n.mu.Lock()
+func (t *Balancer) del(n *shardNode, resp *model.Response) {
 	n.lruList.Remove(resp.GetListElement())
-	n.mu.Unlock()
 }
 
-func (t *Balancer) mostLoaded() *sharded.Shard[uint64, *model.Response] {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	if front := t.memList.Front(); front != nil {
-		return front.Value.(*node).shard
+func (t *Balancer) mostLoadedList(percentage int) []*shardNode {
+
+	shardsNum := (sharded.ShardCount / 100) * percentage
+	if shardsNum <= 0 {
+		shardsNum = 1
 	}
-	return nil
-}
-
-func (t *Balancer) mostLoadedList(n uintptr) []*node {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	shards := make([]*node, 0, n)
 
 	i := 0
-	for front := t.memList.Front(); front != nil; front = front.Next() {
-		if i >= int(n) {
-			return shards
-		}
-		curNode := front.Value.(*node)
-		shards = append(shards, curNode)
+	shards := make([]*shardNode, 0, shardsNum)
+	cur := t.memList.Front()
+	for cur != nil && i < shardsNum {
+		shards = append(shards, cur.Value)
+		cur = cur.Next()
 		i++
 	}
-
 	return shards
 }
 
-func (t *Balancer) evictBatch(ctx context.Context, n *node, num uintptr) uintptr {
+func (t *Balancer) evictBatch(ctx context.Context, n *shardNode, num uintptr) uintptr {
 	var evictionsNum uintptr
 	for {
 		select {
 		case <-ctx.Done():
 			return evictionsNum
 		default:
-			n.mu.Lock()
 			back := n.lruList.Back()
 			if back == nil || evictionsNum > num {
-				n.mu.Unlock()
 				return evictionsNum
 			}
 			n.lruList.Remove(back)
-			n.mu.Unlock()
 
-			if resp, found := n.shard.Del(back.Value.(*model.Request).UniqueKey()); found {
+			if resp, found := n.shard.Del(back.Value.UniqueKey()); found {
 				model.RequestsPool.Put(resp.GetRequest())
-				model.ResponsePool.Put(resp)
+				model.ResponsePool.Put(resp.Free())
 				evictionsNum++
 			}
 			continue

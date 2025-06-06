@@ -2,21 +2,19 @@ package utils
 
 import (
 	"bytes"
+	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
 	"net/http"
-	"sync"
 )
 
-var bufPool = sync.Pool{
-	New: func() any {
-		return new(bytes.Buffer)
-	},
-}
+var PagedataResponsesPool = synced.NewBatchPool[*bytes.Buffer](1000, func() *bytes.Buffer {
+	return new(bytes.Buffer)
+})
 
 func ReadResponseBody(resp *http.Response) ([]byte, error) {
-	buf := bufPool.Get().(*bytes.Buffer)
+	buf := PagedataResponsesPool.Get()
 	defer func() {
 		buf.Reset()
-		bufPool.Put(buf)
+		PagedataResponsesPool.Put(buf)
 	}()
 
 	_, err := buf.ReadFrom(resp.Body)
@@ -24,5 +22,5 @@ func ReadResponseBody(resp *http.Response) ([]byte, error) {
 		return nil, err
 	}
 
-	return append([]byte(nil), buf.Bytes()...), nil
+	return buf.Bytes()[:], nil
 }

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
+	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
 	"net/http"
 )
 
@@ -14,12 +14,14 @@ type Seo interface {
 }
 
 type SeoRepository struct {
-	cfg *config.Config
+	cfg    *config.Config
+	reader synced.PooledReader
 }
 
-func NewSeo(cfg *config.Config) *SeoRepository {
+func NewSeo(cfg *config.Config, reader synced.PooledReader) *SeoRepository {
 	return &SeoRepository{
-		cfg: cfg,
+		cfg:    cfg,
+		reader: reader,
 	}
 }
 
@@ -50,7 +52,6 @@ func (s *SeoRepository) requestPagedata(ctx context.Context, req *model.Request)
 		queryBuf = append(queryBuf, byte(rn))
 	}
 	queryBuf = append(queryBuf, query...)
-
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, string(queryBuf), nil)
 	if err != nil {
 		return nil, err
@@ -62,10 +63,10 @@ func (s *SeoRepository) requestPagedata(ctx context.Context, req *model.Request)
 	}
 	defer func() { _ = response.Body.Close() }()
 
-	body, err := utils.ReadResponseBody(response)
+	body, freeFn, err := s.reader.Read(response)
 	if err != nil {
 		return nil, err
 	}
 
-	return model.NewData(response.StatusCode, response.Header, body), nil
+	return model.NewData(response.StatusCode, response.Header, body, freeFn), nil
 }
