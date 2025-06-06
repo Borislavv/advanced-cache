@@ -56,6 +56,7 @@ func loadCfg() *config.Config {
 		log.Err(err).Msg("failed to unmarshal config from envs")
 		panic(err)
 	}
+	cfg.RefreshEvictionDurationThreshold = time.Duration(float64(cfg.RevalidateInterval) * cfg.RevalidateBeta)
 	return cfg
 }
 

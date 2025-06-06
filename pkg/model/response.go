@@ -99,14 +99,12 @@ func (r *Response) ShouldBeRevalidated(source *Response) bool {
 	if source != nil {
 		return false
 	}
+
 	age := time.Since(time.Unix(0, r.revalidatedAt.Load()))
-	if age < time.Duration(float64(r.cfg.RevalidateInterval)*r.cfg.RevalidateBeta) {
-		return false
+	if age > r.cfg.RefreshEvictionDurationThreshold {
+		return rand.Float64() >= math.Exp(-r.cfg.RevalidateBeta*float64(age)/float64(r.cfg.RevalidateInterval))
 	}
-	if age >= r.cfg.RevalidateInterval {
-		return true
-	}
-	return rand.Float64() >= math.Exp(-r.cfg.RevalidateBeta*float64(age)/float64(r.cfg.RevalidateInterval))
+	return false
 }
 
 func (r *Response) Revalidate(ctx context.Context) {
@@ -117,7 +115,6 @@ func (r *Response) Revalidate(ctx context.Context) {
 	}
 	r.data.Store(data)
 	r.revalidatedAt.Store(time.Now().UnixNano())
-	log.Info().Msg("revalidated")
 }
 
 func (r *Response) GetRequest() *Request {
