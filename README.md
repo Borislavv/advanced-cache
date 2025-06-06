@@ -25,4 +25,5 @@ RPS: ~120.000, AVG response duration: 8.3µs.
 5. lru.topPercentageShards - percentage of shards which will be queried for evict items from them.
 #### Note: Don't change them if you don't know what you do and be careful if you still decide. In most cases it does not necessary. 
 
-Sorry, but at now you cannot use this code in traefik plaguns due to this version has unsafe and other low-level libs, but you can use it as a service. 
+
+#### Sorry, but at now you cannot use this code in traefik plaguns due to this version has unsafe and other low-level libs, but you can use it as a service. 
