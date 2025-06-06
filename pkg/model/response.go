@@ -14,9 +14,7 @@ import (
 	"unsafe"
 )
 
-const preallocation = 1000
-
-var ResponsePool = synced.NewBatchPool[*Response](preallocation, func() *Response {
+var ResponsePool = synced.NewBatchPool[*Response](synced.PreallocationBatchSize, func() *Response {
 	return new(Response)
 })
 

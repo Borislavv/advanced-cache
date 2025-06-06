@@ -12,8 +12,6 @@ import (
 	"gitlab.xbet.lan/v3group/backend/packages/go/liveness-prober"
 )
 
-const syncPoolPreallocation = 1000
-
 type App interface {
 	Start()
 }
@@ -32,7 +30,7 @@ func NewApp(ctx context.Context, cfg *config.Config, probe liveness.Prober) (*Ca
 
 	cacheCfg := &cfg.Config
 	store := storage.New(ctx, cacheCfg)
-	reader := synced.NewPooledResponseReader(syncPoolPreallocation)
+	reader := synced.NewPooledResponseReader(synced.PreallocationBatchSize)
 	repo := repository.NewSeo(cacheCfg, reader)
 
 	if srv, err := server.New(ctx, cfg, store, repo, reader); err != nil {
