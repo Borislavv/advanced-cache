@@ -28,21 +28,19 @@ type LRU struct {
 	shardedMap        *sharded.Map[uint64, *model.Response]
 	balancer          *Balancer
 	evictionThreshold uintptr
-	evictMemCh        chan uintptr
+	evictionTriggerCh chan struct{}
 }
 
 func NewLRU(ctx context.Context, cfg *config.Config) *LRU {
-	mm := sharded.NewMap[uint64, *model.Response](cfg.InitStorageLengthPerShard)
-
 	lru := &LRU{
 		ctx:               ctx,
 		cfg:               cfg,
-		shardedMap:        mm,
+		shardedMap:        sharded.NewMap[uint64, *model.Response](cfg.InitStorageLengthPerShard),
 		evictionThreshold: uintptr(float64(cfg.MemoryLimit) * cfg.MemoryFillThreshold),
-		evictMemCh:        make(chan uintptr, maxEvictors),
-		balancer:          NewBalancer(mm),
+		evictionTriggerCh: make(chan struct{}, maxEvictors),
 	}
 
+	lru.balancer = NewBalancer(lru.shardedMap)
 	lru.shardedMap.WalkShards(func(shardKey int, shard *sharded.Shard[uint64, *model.Response]) {
 		lru.balancer.register(shard)
 	})
@@ -96,9 +94,8 @@ func (c *LRU) Set(newResp *model.Response) {
 func (c *LRU) onSet(key uint64, shard *sharded.Shard[uint64, *model.Response], resp *model.Response) {
 	resp.SetShardKey(shard.ID())
 
-	respSize := resp.Size()
-	if c.shouldEvict(respSize) {
-		c.evict(respSize)
+	if c.shouldEvict(resp.Size()) {
+		c.evict()
 	}
 
 	c.balancer.set(resp)
@@ -123,7 +120,7 @@ func (c *LRU) spawnEvictor() {
 			select {
 			case <-c.ctx.Done():
 				return
-			case <-c.evictMemCh:
+			case <-c.evictionTriggerCh:
 				num, memory := c.evictMem()
 				if c.cfg.IsDebugOn() {
 					if num > 0 || memory > 0 {
@@ -142,9 +139,9 @@ func (c *LRU) shouldEvict(respSize uintptr) bool {
 	return c.shardedMap.Mem()+respSize > c.evictionThreshold
 }
 
-func (c *LRU) evict(mem uintptr) {
+func (c *LRU) evict() {
 	select {
-	case c.evictMemCh <- mem:
+	case c.evictionTriggerCh <- struct{}{}:
 	default:
 		// if async evictor cannot process your request
 		//otherwise use a manual approach
@@ -153,7 +150,7 @@ func (c *LRU) evict(mem uintptr) {
 			if items > 0 || memory > 0 {
 				evictionStatCh <- evictionStat{
 					items: items,
-					mem:   mem,
+					mem:   memory,
 				}
 			}
 		}
@@ -202,7 +199,9 @@ func (c *LRU) runLogDebugInfo() {
 				evictsMemPer5Sec += evictionStatModel.mem
 			case <-ticker:
 				log.Debug().Msgf(
-					"[lru]: evicted [n: %d, mem: %d] (5s), memory usage: %s (limit: %s), storage len: %d, goroutines: %d.",
+					"[lru]: evicted [n: %d, mem: %dbytes] (5s), "+
+						"memory usage: %sbytes (limit: %sbytes), "+
+						"storage len: %d, goroutines: %d.",
 					evictsNumPer5Sec,
 					evictsMemPer5Sec,
 					utils.FmtMem(c.shardedMap.Mem()),
