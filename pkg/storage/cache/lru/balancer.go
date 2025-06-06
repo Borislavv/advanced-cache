@@ -1,7 +1,6 @@
 package lru
 
 import (
-	"context"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/list"
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
@@ -108,7 +107,6 @@ func (t *Balancer) del(n *shardNode, resp *model.Response) {
 }
 
 func (t *Balancer) mostLoadedList(percentage int) []*shardNode {
-
 	shardsNum := (sharded.ShardCount / 100) * percentage
 	if shardsNum <= 0 {
 		shardsNum = 1
@@ -123,27 +121,4 @@ func (t *Balancer) mostLoadedList(percentage int) []*shardNode {
 		i++
 	}
 	return shards
-}
-
-func (t *Balancer) evictBatch(ctx context.Context, n *shardNode, num uintptr) uintptr {
-	var evictionsNum uintptr
-	for {
-		select {
-		case <-ctx.Done():
-			return evictionsNum
-		default:
-			back := n.lruList.Back()
-			if back == nil || evictionsNum > num {
-				return evictionsNum
-			}
-			n.lruList.Remove(back)
-
-			if resp, found := n.shard.Del(back.Value.UniqueKey()); found {
-				model.RequestsPool.Put(resp.GetRequest())
-				model.ResponsePool.Put(resp.Free())
-				evictionsNum++
-			}
-			continue
-		}
-	}
 }

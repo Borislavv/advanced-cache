@@ -5,7 +5,6 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/list"
 	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
-	"github.com/rs/zerolog/log"
 	"math"
 	"math/rand/v2"
 	"net/http"
@@ -107,14 +106,14 @@ func (r *Response) ShouldBeRevalidated(source *Response) bool {
 	return false
 }
 
-func (r *Response) Revalidate(ctx context.Context) {
+func (r *Response) Revalidate(ctx context.Context) error {
 	data, err := r.revalidator(ctx)
 	if err != nil {
-		log.Err(err).Msg("error occurred while revalidating item")
-		return
+		return err
 	}
 	r.data.Store(data)
 	r.revalidatedAt.Store(time.Now().UnixNano())
+	return nil
 }
 
 func (r *Response) GetRequest() *Request {
