@@ -2,10 +2,7 @@ package rate
 
 import (
 	"context"
-	"errors"
-	"gitlab.xbet.lan/v3group/backend/applications/cms/watcher/internal/shared/infrastructure/utils"
-	"gitlab.xbet.lan/v3group/backend/packages/go/logger/pkg/logger"
-	loggerenum "gitlab.xbet.lan/v3group/backend/packages/go/logger/pkg/logger/enum"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
 	"runtime"
 	"time"
 )
@@ -14,31 +11,17 @@ type Limiter interface {
 	Take() (token struct{})
 }
 
-type RateLimiter struct {
+type Limit struct {
 	ctx context.Context
 	q   chan struct{}
 }
 
-type CancelFunc = func()
-
 // NewLimiter - limit: tokens per second will be allocated, init: predefined (allocated) number of tokens (will be allowed on start).
-func NewLimiter(ctx context.Context, limit, init int) (*RateLimiter, CancelFunc, error) {
-	if init > limit {
-		return nil, func() {}, errors.New("init value is greater than limit")
-	} else if limit <= 0 {
-		return nil, func() {}, errors.New("limit is zero or negative value, potentially dangerous code (deadlock possible)")
-	} else if init < 0 {
-		logger.JsonRawLog("NewLimiter: init argument was skipped because it has a negative value which is not allowed", loggerenum.WarningLvl, nil)
-		init = 0
-	}
-
-	ctx, cancel := context.WithCancel(ctx)
-	rl := &RateLimiter{ctx: ctx, q: spawnTokenProvider(ctx, limit, init)}
-
-	return rl, func() { cancel() }, nil
+func NewLimiter(ctx context.Context, limit, init int) *Limit {
+	return &Limit{ctx: ctx, q: spawnTokenProvider(ctx, limit, init)}
 }
 
-func (rl *RateLimiter) Take() (token struct{}) {
+func (rl *Limit) Take() (token struct{}) {
 	return <-rl.q
 }
 
