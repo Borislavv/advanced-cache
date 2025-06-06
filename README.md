@@ -4,10 +4,13 @@
 Each bench has 1000 ops. inside one b.N iteration due to have a more heavy job. Benchmark has a problems with tests with nanosecond executions. That is mean that results must be divided by 1000.
 
 Get: ~80ns/op, 20 bytes and zero allocations. Set: ~15ns/op, 105 bytes and zero allocations too.
+
 <img width="1269" alt="image" src="https://github.com/user-attachments/assets/6a28aa7d-bda2-4b40-ae34-5248bd60962a" />
 
 ### Wrk results:
+
 RPS: ~120.000, AVG response duration: 8.3µs.
+
 <img width="601" alt="image" src="https://github.com/user-attachments/assets/6be0dd4d-4015-4c89-8724-9f55903146f0" />
 <img width="621" alt="image" src="https://github.com/user-attachments/assets/9f707945-0cae-4f37-89d7-b558a5d2bc9f" />
 
