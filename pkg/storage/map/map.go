@@ -5,7 +5,7 @@ import (
 	"unsafe"
 )
 
-const ShardCount = 4096
+const ShardCount uint64 = 4096
 
 type Keyer interface {
 	~int | ~int8 | ~int16 | ~int32 | ~int64 | ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | uintptr
@@ -23,7 +23,7 @@ type (
 
 func NewMap[K Keyer, V Sizer](defaultLen int) *Map[K, V] {
 	m := &Map[K, V]{}
-	for id := 0; id < ShardCount; id++ {
+	for id := uint64(0); id < ShardCount; id++ {
 		m.shards[id] = NewShard[K, V](id, defaultLen)
 	}
 	return m
