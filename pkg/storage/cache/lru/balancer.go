@@ -9,26 +9,30 @@ import (
 type shardNode struct {
 	lruList     *list.List[*model.Request] // less used starts at the back
 	memListElem *list.Element[*shardNode]
-	shard       *sharded.Shard[uint64, *model.Response]
+	shard       *sharded.Shard[*model.Response]
 }
 
 type Balancer struct {
 	shards     [sharded.ShardCount]*shardNode
 	memList    *list.List[*shardNode] // more loaded starts at the front
-	shardedMap *sharded.Map[uint64, *model.Response]
+	shardedMap *sharded.Map[*model.Response]
 }
 
-func NewBalancer(shardedMap *sharded.Map[uint64, *model.Response]) *Balancer {
+func NewBalancer(shardedMap *sharded.Map[*model.Response]) *Balancer {
+	const isListShouldByAThreadSafe bool = true
+
 	return &Balancer{
-		memList:    list.New[*shardNode](),
+		memList:    list.New[*shardNode](isListShouldByAThreadSafe),
 		shardedMap: shardedMap,
 	}
 }
 
-func (t *Balancer) register(shard *sharded.Shard[uint64, *model.Response]) {
+func (t *Balancer) register(shard *sharded.Shard[*model.Response]) {
+	const isThreadSafeListMustBe bool = true
+
 	n := &shardNode{
 		shard:   shard,
-		lruList: list.New[*model.Request](),
+		lruList: list.New[*model.Request](isThreadSafeListMustBe),
 	}
 
 	n.memListElem = t.memList.PushBack(n)
@@ -106,8 +110,35 @@ func (t *Balancer) del(n *shardNode, resp *model.Response) {
 	n.lruList.Remove(resp.GetListElement())
 }
 
+func (t *Balancer) mostLoaded() (shard *shardNode, found bool) {
+	const (
+		defaultShardSize            uintptr = 8
+		checkNumOfNextNeighborhoods int     = 48
+	)
+
+	cur := t.memList.Front()
+	if cur == nil {
+		return nil, false
+	}
+	if cur.Value.shard.Size() > defaultShardSize {
+		return cur.Value, true
+	}
+
+	i := 0
+	cur = cur.Next()
+	for i < checkNumOfNextNeighborhoods && cur != nil {
+		if cur.Value.shard.Size() > defaultShardSize {
+			return cur.Value, true
+		}
+		cur = cur.Next()
+		i++
+	}
+
+	return nil, false
+}
+
 func (t *Balancer) mostLoadedList(percentage int) []*shardNode {
-	shardsNum := (sharded.ShardCount / 100) * percentage
+	shardsNum := (int(sharded.ShardCount) / 100) * percentage
 	if shardsNum <= 0 {
 		shardsNum = 1
 	}
