@@ -2,6 +2,7 @@ package lru
 
 import (
 	"context"
+	times "github.com/Borislavv/traefik-http-cache-plugin/pkg/time"
 	"runtime"
 	"time"
 
@@ -25,23 +26,25 @@ type evictionStat struct {
 type LRU struct {
 	ctx               context.Context
 	cfg               *config.Config
-	shardedMap        *sharded.Map[uint64, *model.Response]
+	shardedMap        *sharded.Map[*model.Response]
+	timeWheel         *times.Wheel
 	balancer          *Balancer
 	evictionThreshold uintptr
 	evictionTriggerCh chan struct{}
 }
 
-func NewLRU(ctx context.Context, cfg *config.Config) *LRU {
+func NewLRU(ctx context.Context, cfg *config.Config, timeWheel *times.Wheel, shardedMap *sharded.Map[*model.Response]) *LRU {
 	lru := &LRU{
 		ctx:               ctx,
 		cfg:               cfg,
-		shardedMap:        sharded.NewMap[uint64, *model.Response](cfg.InitStorageLengthPerShard),
+		timeWheel:         timeWheel,
+		shardedMap:        shardedMap,
 		evictionThreshold: uintptr(float64(cfg.MemoryLimit) * cfg.MemoryFillThreshold),
 		evictionTriggerCh: make(chan struct{}, maxEvictors),
 	}
 
 	lru.balancer = NewBalancer(lru.shardedMap)
-	lru.shardedMap.WalkShards(func(shardKey int, shard *sharded.Shard[uint64, *model.Response]) {
+	lru.shardedMap.WalkShards(func(shardKey uint64, shard *sharded.Shard[*model.Response]) {
 		lru.balancer.register(shard)
 	})
 
@@ -71,10 +74,6 @@ func (c *LRU) onFound(shardKey uint64, target *model.Response, source *model.Res
 	}
 
 	c.balancer.move(shardKey, target.GetListElement())
-
-	if target.ShouldBeRevalidated(source) {
-		go target.Revalidate(c.ctx)
-	}
 }
 
 func (c *LRU) Set(newResp *model.Response) {
@@ -91,7 +90,7 @@ func (c *LRU) Set(newResp *model.Response) {
 	c.onSet(key, shard, newResp)
 }
 
-func (c *LRU) onSet(key uint64, shard *sharded.Shard[uint64, *model.Response], resp *model.Response) {
+func (c *LRU) onSet(key uint64, shard *sharded.Shard[*model.Response], resp *model.Response) {
 	resp.SetShardKey(shard.ID())
 
 	if c.shouldEvict(resp.Size()) {
@@ -100,6 +99,7 @@ func (c *LRU) onSet(key uint64, shard *sharded.Shard[uint64, *model.Response], r
 
 	c.balancer.set(resp)
 	shard.Set(key, resp)
+	c.timeWheel.Add(key, shard.ID(), c.cfg.RevalidateInterval)
 }
 
 func (c *LRU) del(req *model.Request) (*model.Response, bool) {
@@ -159,19 +159,24 @@ func (c *LRU) evict() {
 
 func (c *LRU) evictMem() (items int, mem uintptr) {
 	const (
-		evictItemsPerIter   = 10
-		topPercentageShards = 25
-		maxEvictIterations  = 29
+		numShardsForEvictionCheck = 512
+		evictItemsPerIter         = 100
+		maxEvictIterations        = 10
 	)
+
 	for iter := 0; iter < maxEvictIterations; iter++ {
-		nodes := c.balancer.mostLoadedList(topPercentageShards)
-		for _, node := range nodes {
-			back := node.lruList.Back()
+		for i := 0; i < numShardsForEvictionCheck; i++ {
+			shard, found := c.balancer.mostLoaded()
+			if !found {
+				return items, mem
+			}
+
+			back := shard.lruList.Back()
 			if back == nil {
-				c.balancer.rebalance(node)
+				c.balancer.rebalance(shard)
 				continue
 			}
-			if resp, found := c.del(back.Value); found {
+			if resp, respFound := c.del(back.Value); respFound {
 				items++
 				mem += resp.Size()
 			}
