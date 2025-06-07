@@ -77,15 +77,14 @@ func (k InternedBytes) GoString() string {
 }
 
 type Request struct {
-	mu         *sync.RWMutex
-	project    []byte
-	domain     []byte
-	language   []byte
-	tags       [][]byte
-	freeTagsFn FreeResourceFunc
+	project  []byte
+	domain   []byte
+	language []byte
+	tags     [][]byte
 
-	uniqueQuery []byte
 	uniqueKey   *atomic.Uint64
+	uniqueQuery atomic.Pointer[[]byte]
+	freeTagsPtr atomic.Pointer[FreeResourceFunc]
 }
 
 func NewRequest(q *fasthttp.Args) (*Request, error) {
@@ -106,7 +105,6 @@ func NewManualRequest(project, domain, language []byte, tags [][]byte, freeTagsF
 
 	req := RequestsPool.Get()
 	*req = Request{
-		mu:        &sync.RWMutex{},
 		uniqueKey: &atomic.Uint64{},
 	}
 
@@ -120,7 +118,7 @@ func NewManualRequest(project, domain, language []byte, tags [][]byte, freeTagsF
 		}
 	}
 	req.tags = tags
-	req.freeTagsFn = freeTagsFn
+	req.freeTagsPtr.Store(&freeTagsFn)
 
 	return req, nil
 }
@@ -193,12 +191,9 @@ func (r *Request) UniqueKey() uint64 {
 }
 
 func (r *Request) ToQuery() []byte {
-	r.mu.RLock()
-	if len(r.uniqueQuery) > 0 {
-		defer r.mu.RUnlock()
-		return r.uniqueQuery
+	if cached := r.uniqueQuery.Load(); cached != nil {
+		return *cached
 	}
-	r.mu.RUnlock()
 
 	bufCap := preallocatedBufferCapacity + len(r.project) + len(r.domain) + len(r.language)
 	for _, tag := range r.tags {
@@ -228,18 +223,15 @@ func (r *Request) ToQuery() []byte {
 	buf = append(buf, bytes.Repeat([]byte("[choice]"), n)...)
 	buf = append(buf, []byte("=null")...)
 
-	r.mu.Lock()
-	r.uniqueQuery = buf
-	r.mu.Unlock()
-
+	r.uniqueQuery.CompareAndSwap(nil, &buf)
 	return buf
 }
 
 func (r *Request) Free() {
-	r.freeTagsFn()
-	r.uniqueKey.Store(0)
-	if cap(r.uniqueQuery) > 0 {
-		r.uniqueQuery = r.uniqueQuery[:0]
+	if fnPtr := r.freeTagsPtr.Swap(nil); fnPtr != nil && *fnPtr != nil {
+		(*fnPtr)()
 	}
+	r.uniqueKey.Store(0)
+	r.uniqueQuery.Store(nil)
 	RequestsPool.Put(r)
 }
