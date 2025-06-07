@@ -179,6 +179,8 @@ func (c *LRU) evictMem() (items int, mem uintptr) {
 			if resp, respFound := c.del(back.Value); respFound {
 				items++
 				mem += resp.Size()
+			} else {
+				shard.lruList.Remove(back)
 			}
 			if items >= evictItemsPerIter {
 				return items, mem
