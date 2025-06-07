@@ -94,19 +94,20 @@ func extractTags(args *fasthttp.Args) ([][]byte, FreeResourceFunc) {
 	)
 
 	tagsSls := TagsSlicesPool.Get()
-	for _, tagSl := range tagsSls {
-		tagSl = tagSl[:0]
+	for i := range tagsSls {
+		tagsSls[i] = tagsSls[i][:0]
 	}
 
-	i := 0
+	idx := 0
 	args.VisitAll(func(key, value []byte) {
-		if !bytes.HasPrefix(key, choiceValue) || bytes.Equal(value, nullValue) {
+		if !bytes.HasPrefix(key, choiceValue) || bytes.Equal(value, nullValue) || idx >= maxTagsLen {
 			return
 		}
-		tagsSls[i] = append(tagsSls[i], value...)
-		i++
+		tagsSls[idx] = append(tagsSls[idx], value...)
+		idx++
 	})
-	return tagsSls, func() { TagsSlicesPool.Put(tagsSls) }
+
+	return tagsSls[:idx], func() { TagsSlicesPool.Put(tagsSls) }
 }
 
 func (r *Request) GetProject() []byte {
@@ -204,5 +205,7 @@ func (r *Request) ToQuery() []byte {
 func (r *Request) Free() {
 	r.freeTagsFn()
 	r.uniqueKey.Store(0)
-	r.uniqueQuery = r.uniqueQuery[:0]
+	if cap(r.uniqueQuery) > 0 {
+		r.uniqueQuery = r.uniqueQuery[:0]
+	}
 }
