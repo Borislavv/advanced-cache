@@ -62,20 +62,11 @@ func (t *Balancer) rebalance(n *shardNode) {
 	if curr == nil {
 		return
 	}
-	curSize := curr.Value.shard.Size()
-	for prev := curr.Prev(); prev != nil; prev = curr.Prev() {
-		if curSize <= prev.Value.shard.Size() {
-			break
-		}
-		t.memList.SwapValues(curr, prev)
-		curr = prev
-	}
-	for next := curr.Next(); next != nil; next = curr.Next() {
-		if curSize >= next.Value.shard.Size() {
-			break
-		}
-		t.memList.SwapValues(curr, next)
+	next := curr.Next()
+	for next != nil && curr.Value.shard.Size() < next.Value.shard.Size() {
+		t.swap(curr, next)
 		curr = next
+		next = curr.Next()
 	}
 }
 
