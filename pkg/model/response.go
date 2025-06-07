@@ -86,21 +86,13 @@ func (d *Data) Free() {
 }
 
 type Response struct {
-	/* mutable (pointer change but data are immutable) */
-	data *atomic.Pointer[Data]
-	/* mutable (pointer change but data are immutable) */
-	request *atomic.Pointer[Request]
-	/* mutable */
-	revalidatedAt *atomic.Int64 // UnixNano
-	/* mutable */
-	listElement *atomic.Pointer[list.Element[*Request]]
-
-	/* immutable */
-	shardKey *atomic.Uint64
-	/* immutable */
-	cfg *config.Config
-	/* immutable */
-	revalidator *atomic.Pointer[ResponseRevalidator]
+	cfg           *config.Config // does not change
+	data          *atomic.Pointer[Data]
+	request       *atomic.Pointer[Request]
+	revalidatedAt *atomic.Int64
+	listElement   *atomic.Pointer[list.Element[*Request]]
+	shardKey      *atomic.Uint64
+	revalidator   *atomic.Pointer[ResponseRevalidator]
 }
 
 func NewResponse(
@@ -111,15 +103,11 @@ func NewResponse(
 ) (*Response, error) {
 	resp := ResponsePool.Get()
 
-	// true init.
-	if resp.cfg == nil {
-		resp.cfg = cfg
+	if resp.data == nil {
+		resp.data = &atomic.Pointer[Data]{}
 	}
 	if resp.request == nil {
 		resp.request = &atomic.Pointer[Request]{}
-	}
-	if resp.data == nil {
-		resp.data = &atomic.Pointer[Data]{}
 	}
 	if resp.revalidatedAt == nil {
 		resp.revalidatedAt = &atomic.Int64{}
@@ -133,8 +121,10 @@ func NewResponse(
 	if resp.revalidator == nil {
 		resp.revalidator = &atomic.Pointer[ResponseRevalidator]{}
 	}
+	if resp.cfg == nil {
+		resp.cfg = cfg
+	}
 
-	// reinit.
 	resp.data.Store(data)
 	resp.request.Store(req)
 	resp.revalidator.Store(&revalidator)
@@ -147,7 +137,6 @@ func (r *Response) ShouldBeRevalidated(source *Response) bool {
 	if source != nil {
 		return false
 	}
-
 	age := time.Since(time.Unix(0, r.revalidatedAt.Load()))
 	if age > r.cfg.RefreshEvictionDurationThreshold {
 		return rand.Float64() >= math.Exp(-r.cfg.RevalidateBeta*float64(age)/float64(r.cfg.RevalidateInterval))
@@ -156,7 +145,11 @@ func (r *Response) ShouldBeRevalidated(source *Response) bool {
 }
 
 func (r *Response) Revalidate(ctx context.Context) error {
-	data, err := (*(r.revalidator.Load()))(ctx)
+	fn := r.revalidator.Load()
+	if fn == nil || *fn == nil {
+		return nil
+	}
+	data, err := (*fn)(ctx)
 	if err != nil {
 		return err
 	}
@@ -204,10 +197,10 @@ func (r *Response) GetHeaders() http.Header {
 func (r *Response) GetRevalidatedAt() time.Time {
 	return time.Unix(0, r.revalidatedAt.Load())
 }
+
 func (r *Response) Size() uintptr {
 	var size = int(unsafe.Sizeof(r) + unsafe.Sizeof(r.data))
 
-	// calc dynamic resp fields weight
 	data := r.data.Load()
 	if data != nil {
 		for key, values := range data.headers {
@@ -219,8 +212,7 @@ func (r *Response) Size() uintptr {
 		size += len(data.body)
 	}
 
-	// calc dynamic req fields weight
-	req := r.GetRequest()
+	req := r.request.Load()
 	if req != nil {
 		size += int(unsafe.Sizeof(req))
 		size += len(req.project)
@@ -230,19 +222,22 @@ func (r *Response) Size() uintptr {
 			size += len(tag)
 		}
 		size += int(unsafe.Sizeof(req.uniqueKey))
-		size += len(req.uniqueQuery)
-
+		if q := req.ToQuery(); q != nil {
+			size += len(q)
+		}
 	}
 
 	return uintptr(size)
 }
 
 func (r *Response) Free() {
-	r.data.Load().Free()
-	r.request.Load().Free()
-
+	if d := r.data.Load(); d != nil {
+		d.Free()
+	}
+	if req := r.request.Load(); req != nil {
+		req.Free()
+	}
 	r.listElement.Store(nil)
 	r.shardKey.Store(0)
-
 	ResponsePool.Put(r)
 }
