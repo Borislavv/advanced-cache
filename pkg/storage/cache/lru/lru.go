@@ -29,17 +29,21 @@ type LRU struct {
 	shardedMap        *sharded.Map[*model.Response]
 	timeWheel         *times.Wheel
 	balancer          *Balancer
-	evictionThreshold uintptr
+	memoryLimit       uintptr
+	memoryThreshold   uintptr
 	evictionTriggerCh chan struct{}
 }
 
 func NewLRU(ctx context.Context, cfg *config.Config, timeWheel *times.Wheel, shardedMap *sharded.Map[*model.Response]) *LRU {
+	const maxMemoryCoefficient uintptr = 98
+
 	lru := &LRU{
 		ctx:               ctx,
 		cfg:               cfg,
 		timeWheel:         timeWheel,
 		shardedMap:        shardedMap,
-		evictionThreshold: uintptr(float64(cfg.MemoryLimit) * cfg.MemoryFillThreshold),
+		memoryThreshold:   uintptr(float64(cfg.MemoryLimit) * cfg.MemoryFillThreshold),
+		memoryLimit:       (uintptr(cfg.MemoryLimit) / 100) * maxMemoryCoefficient,
 		evictionTriggerCh: make(chan struct{}, maxEvictors),
 	}
 
@@ -92,8 +96,9 @@ func (c *LRU) Set(newResp *model.Response) {
 func (c *LRU) onSet(key uint64, shard *sharded.Shard[*model.Response], resp *model.Response) {
 	resp.SetShardKey(shard.ID())
 
-	if c.shouldEvict(resp.Size()) {
-		c.triggerEviction()
+	respMem := resp.Size()
+	if c.shouldEvict(respMem) {
+		c.triggerEviction(respMem)
 	}
 
 	c.balancer.set(resp)
@@ -130,41 +135,39 @@ func (c *LRU) spawnEvictor() {
 }
 
 func (c *LRU) shouldEvict(respSize uintptr) bool {
-	return c.shardedMap.Mem()+respSize > c.evictionThreshold
+	return c.shardedMap.Mem()+respSize > c.memoryThreshold
 }
 
-func (c *LRU) triggerEviction() {
+func (c *LRU) shouldManualEvict(respSize uintptr) bool {
+	return c.shardedMap.Mem()+respSize > c.memoryLimit
+}
+
+func (c *LRU) triggerEviction(respSize uintptr) {
 	select {
 	case c.evictionTriggerCh <- struct{}{}:
 	default:
-		// if async evictor cannot process your request
-		//  otherwise use a manual approach
-		items, memory := c.evictUntilWithinLimit()
-		if c.cfg.IsDebugOn() && (items > 0 || memory > 0) {
-			evictionStatCh <- evictionStat{items: items, mem: memory}
+		if c.shouldManualEvict(respSize) {
+			// if async evictor cannot process your request
+			//  otherwise use a manual approach
+			items, memory := c.evictUntilWithinLimit()
+			if c.cfg.IsDebugOn() && (items > 0 || memory > 0) {
+				evictionStatCh <- evictionStat{items: items, mem: memory}
+			}
 		}
 	}
 }
 
 func (c *LRU) evictUntilWithinLimit() (items int, mem uintptr) {
-	var (
-		limit            = c.evictionThreshold
-		avgItemsPerShard = float64(c.shardedMap.Len()) / float64(sharded.ShardCount)
-		preferMostLoaded = avgItemsPerShard > 4.0
-	)
-
 	const maxEvictIterations = 2048
+	var limit = c.memoryThreshold
+
 	for i := 0; i < maxEvictIterations && c.shardedMap.Mem() > limit; i++ {
 		var (
 			found bool
 			shard *shardNode
 		)
 
-		if preferMostLoaded {
-			shard, found = c.balancer.mostLoaded()
-		} else {
-			shard, found = c.balancer.anyLoaded()
-		}
+		shard, found = c.balancer.mostLoaded()
 		if !found {
 			break
 		}
@@ -172,6 +175,11 @@ func (c *LRU) evictUntilWithinLimit() (items int, mem uintptr) {
 		back := shard.lruList.Back()
 		if back == nil {
 			c.balancer.rebalance(shard)
+			continue
+		}
+
+		if back.Value == nil {
+			shard.lruList.Remove(back)
 			continue
 		}
 

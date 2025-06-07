@@ -101,58 +101,12 @@ func (t *Balancer) del(n *shardNode, resp *model.Response) {
 	n.lruList.Remove(resp.GetListElement())
 }
 
-func (t *Balancer) mostLoaded() (shard *shardNode, found bool) {
-	const (
-		defaultShardSize            uintptr = 8
-		checkNumOfNextNeighborhoods int     = 48
-	)
-
-	cur := t.memList.Front()
-	if cur == nil {
-		return nil, false
-	}
-	if cur.Value.shard.Size() > defaultShardSize {
-		return cur.Value, true
-	}
-
-	i := 0
-	cur = cur.Next()
-	for i < checkNumOfNextNeighborhoods && cur != nil {
-		if cur.Value.shard.Size() > defaultShardSize {
-			return cur.Value, true
-		}
-		cur = cur.Next()
-		i++
-	}
-
-	return nil, false
-}
-
-func (t *Balancer) mostLoadedList(percentage int) []*shardNode {
-	shardsNum := (int(sharded.ShardCount) / 100) * percentage
-	if shardsNum <= 0 {
-		shardsNum = 1
-	}
-
-	i := 0
-	shards := make([]*shardNode, 0, shardsNum)
-	cur := t.memList.Front()
-	for cur != nil && i < shardsNum {
-		shards = append(shards, cur.Value)
-		cur = cur.Next()
-		i++
-	}
-	return shards
-}
-
-// anyLoaded returns the first non-empty shard node found in memList.
-func (t *Balancer) anyLoaded() (*shardNode, bool) {
-	cur := t.memList.Front()
-	for cur != nil {
+// mostLoaded returns the first non-empty shard node found in memList.
+func (t *Balancer) mostLoaded() (*shardNode, bool) {
+	for cur := t.memList.Front(); cur != nil; cur = cur.Next() {
 		if cur.Value != nil && cur.Value.shard.Len.Load() > 0 {
 			return cur.Value, true
 		}
-		cur = cur.Next()
 	}
 	return nil, false
 }

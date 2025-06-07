@@ -65,6 +65,10 @@ func NewManualRequest(project, domain, language []byte, tags [][]byte, freeTagsF
 	}
 
 	req := RequestsPool.Get()
+	*req = Request{
+		mu:        &sync.RWMutex{},
+		uniqueKey: &atomic.Uint64{},
+	}
 
 	if req.mu == nil {
 		req.mu = new(sync.RWMutex)
