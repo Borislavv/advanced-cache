@@ -2,6 +2,9 @@ package storage
 
 import (
 	"context"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
+	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
+	time2 "github.com/Borislavv/traefik-http-cache-plugin/pkg/time"
 	"os"
 	"runtime"
 	"runtime/pprof"
@@ -32,7 +35,9 @@ func BenchmarkReadFromStorage1000TimesPerIter(b *testing.B) {
 		MemoryFillThreshold:       0.95,
 		MemoryLimit:               1024 * 1024 * 1024 * 3,
 	}
-	db := New(ctx, cfg)
+	shardedMap := sharded.NewMap[*model.Response](cfg.InitStorageLengthPerShard)
+	time2.NewWheel(ctx, cfg)
+	db := New(ctx, cfg, shardedMap)
 	responses := mock.GenerateRandomResponses(cfg, b.N+1)
 	for _, resp := range responses {
 		db.Set(resp)
