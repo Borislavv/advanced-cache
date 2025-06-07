@@ -144,3 +144,15 @@ func (t *Balancer) mostLoadedList(percentage int) []*shardNode {
 	}
 	return shards
 }
+
+// anyLoaded returns the first non-empty shard node found in memList.
+func (t *Balancer) anyLoaded() (*shardNode, bool) {
+	cur := t.memList.Front()
+	for cur != nil {
+		if cur.Value != nil && cur.Value.shard.Len.Load() > 0 {
+			return cur.Value, true
+		}
+		cur = cur.Next()
+	}
+	return nil, false
+}
