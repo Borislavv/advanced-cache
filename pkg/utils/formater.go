@@ -13,27 +13,33 @@ func FmtMem(bytes uintptr) string {
 	switch {
 	case bytes >= TB:
 		t := bytes / TB
-		rem := bytes % TB
-		return fmt.Sprintf("%dTB %dGB %dMB %dKB %dB", t, rem/GB, (rem%GB)/MB, (rem%MB)/KB, rem%KB)
+		gb := (bytes % TB) / GB
+		if gb > 0 {
+			return fmt.Sprintf("%dTB %dGB", t, gb)
+		}
+		return fmt.Sprintf("%dTB", t)
+
 	case bytes >= GB:
 		g := bytes / GB
-		rem := bytes % GB
-		return fmt.Sprintf("%dGB %dMB %dKB %dB", g, rem/MB, (rem%MB)/KB, rem%KB)
+		mb := (bytes % GB) / MB
+		if mb > 0 {
+			return fmt.Sprintf("%dGB %dMB", g, mb)
+		}
+		return fmt.Sprintf("%dGB", g)
+
 	case bytes >= MB:
 		m := bytes / MB
-		rem := bytes % MB
-		return fmt.Sprintf("%dMB %dKB %dB", m, rem/KB, rem%KB)
+		kb := (bytes % MB) / KB
+		if kb > 0 {
+			return fmt.Sprintf("%dMB %dKB", m, kb)
+		}
+		return fmt.Sprintf("%dMB", m)
+
 	case bytes >= KB:
 		k := bytes / KB
-		return fmt.Sprintf("%dKB %dB", k, bytes%KB)
+		return fmt.Sprintf("%dKB", k)
+
 	default:
 		return fmt.Sprintf("%dB", bytes)
 	}
-}
-
-func BoolToString(val bool) string {
-	if val {
-		return "true"
-	}
-	return "false"
 }
