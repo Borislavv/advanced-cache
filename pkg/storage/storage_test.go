@@ -36,8 +36,8 @@ func BenchmarkReadFromStorage1000TimesPerIter(b *testing.B) {
 		MemoryLimit:               1024 * 1024 * 1024 * 3,
 	}
 	shardedMap := sharded.NewMap[*model.Response](cfg.InitStorageLengthPerShard)
-	time2.NewWheel(ctx, cfg)
-	db := New(ctx, cfg, shardedMap)
+	wheel := time2.NewWheel(ctx, shardedMap)
+	db := New(ctx, cfg, wheel, shardedMap)
 	responses := mock.GenerateRandomResponses(cfg, b.N+1)
 	for _, resp := range responses {
 		db.Set(resp)
@@ -96,7 +96,9 @@ func BenchmarkWriteIntoStorage1000TimesPerIter(b *testing.B) {
 		MemoryFillThreshold:       0.95,
 		MemoryLimit:               1024 * 1024 * 1024 * 3,
 	}
-	db := New(ctx, cfg)
+	shardedMap := sharded.NewMap[*model.Response](cfg.InitStorageLengthPerShard)
+	wheel := time2.NewWheel(ctx, shardedMap)
+	db := New(ctx, cfg, wheel, shardedMap)
 	responses := mock.GenerateRandomResponses(cfg, b.N+1)
 	length := len(responses)
 
@@ -147,7 +149,9 @@ func BenchmarkGetAllocs(b *testing.B) {
 		MemoryFillThreshold:       0.95,
 		MemoryLimit:               1024 * 1024,
 	}
-	db := New(ctx, cfg)
+	shardedMap := sharded.NewMap[*model.Response](cfg.InitStorageLengthPerShard)
+	wheel := time2.NewWheel(ctx, shardedMap)
+	db := New(ctx, cfg, wheel, shardedMap)
 	resp := mock.GenerateRandomResponses(cfg, 1)[0]
 	db.Set(resp)
 	req := resp.GetRequest()
@@ -168,7 +172,9 @@ func BenchmarkSetAllocs(b *testing.B) {
 		MemoryFillThreshold:       0.95,
 		MemoryLimit:               1024 * 1024,
 	}
-	db := New(ctx, cfg)
+	shardedMap := sharded.NewMap[*model.Response](cfg.InitStorageLengthPerShard)
+	wheel := time2.NewWheel(ctx, shardedMap)
+	db := New(ctx, cfg, wheel, shardedMap)
 	resp := mock.GenerateRandomResponses(cfg, 1)[0]
 
 	allocs := testing.AllocsPerRun(100000, func() {
