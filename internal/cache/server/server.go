@@ -13,7 +13,6 @@ import (
 	"gitlab.xbet.lan/v3group/backend/packages/go/httpserver/pkg/httpserver/controller"
 	"gitlab.xbet.lan/v3group/backend/packages/go/httpserver/pkg/httpserver/middleware"
 	"gitlab.xbet.lan/v3group/backend/packages/go/metrics"
-	prometheusrequestmiddleware "gitlab.xbet.lan/v3group/backend/packages/go/metrics/middleware"
 	"sync"
 	"sync/atomic"
 )
@@ -150,10 +149,7 @@ func (s *HttpServer) controllers(cache storage.Storage, seoRepo repository.Seo, 
 // requestMiddlewares returns a slice of server.HttpMiddleware[s] which will executes in reverse order before handling request.
 func (s *HttpServer) middlewares() []middleware.HttpMiddleware {
 	return []middleware.HttpMiddleware{
-		/** exec 1st. */ middleware.NewInitCtxMiddleware(s.ctx, s.cfg),
 		/** exec 2nd. */ middleware.NewApplicationJsonMiddleware(),
-		/** exec 3rd. */ middleware.NewForwardIDsMiddleware(s.ctx, s.cfg),
 		/** exec 4th. */ middleware.NewWatermarkMiddleware(s.ctx, s.cfg),
-		/** exec 5rd. */ prometheusrequestmiddleware.NewPrometheusMetrics(s.ctx, s.metrics),
 	}
 }

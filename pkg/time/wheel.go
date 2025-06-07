@@ -2,6 +2,7 @@ package time
 
 import (
 	"context"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/consts"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/rate"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/list"
@@ -11,6 +12,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"strconv"
 	"time"
+	"unsafe"
 )
 
 type Wheeler interface {
@@ -28,6 +30,13 @@ type Wheel struct {
 	insertCh   chan *spoke
 	updateCh   chan *spoke
 	removeCh   chan *spoke
+}
+
+func (w *Wheel) Memory() uintptr {
+	mem := unsafe.Sizeof(w)
+	mem += uintptr(w.spokesList.Len() * consts.PtrBytesWeigh)
+	mem += uintptr(w.spokesPool.Len() * consts.PtrBytesWeigh)
+	return mem
 }
 
 func NewWheel(ctx context.Context, shardedMap *sharded.Map[*model.Response]) *Wheel {

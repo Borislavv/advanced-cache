@@ -156,7 +156,7 @@ func (r *Response) GetRevalidatedAt() time.Time {
 	return time.Unix(0, r.revalidatedAt.Load())
 }
 func (r *Response) Size() uintptr {
-	var size = int(unsafe.Sizeof(r))
+	var size = int(unsafe.Sizeof(r) + unsafe.Sizeof(r.data))
 
 	// calc dynamic resp fields weight
 	data := r.data.Load()
@@ -180,6 +180,9 @@ func (r *Response) Size() uintptr {
 		for _, tag := range req.tags {
 			size += len(tag)
 		}
+		size += int(unsafe.Sizeof(req.uniqueKey))
+		size += len(req.uniqueQuery)
+
 	}
 
 	return uintptr(size)

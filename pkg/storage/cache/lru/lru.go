@@ -3,7 +3,9 @@ package lru
 import (
 	"context"
 	"runtime"
+	"strconv"
 	"time"
+	"unsafe"
 
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
@@ -135,11 +137,19 @@ func (c *LRU) spawnEvictor() {
 }
 
 func (c *LRU) shouldEvict(respSize uintptr) bool {
-	return c.shardedMap.Mem()+respSize > c.memoryThreshold
+	return c.memory()+respSize > c.memoryThreshold
 }
 
 func (c *LRU) shouldManualEvict(respSize uintptr) bool {
-	return c.shardedMap.Mem()+respSize > c.memoryLimit
+	return c.memory()+respSize > c.memoryLimit
+}
+
+func (c *LRU) memory() uintptr {
+	mem := unsafe.Sizeof(c)
+	mem += c.shardedMap.Mem()
+	mem += c.balancer.memory()
+	mem += c.timeWheel.Memory()
+	return mem
 }
 
 func (c *LRU) triggerEviction(respSize uintptr) {
@@ -161,7 +171,7 @@ func (c *LRU) evictUntilWithinLimit() (items int, mem uintptr) {
 	const maxEvictIterations = 2048
 	var limit = c.memoryThreshold
 
-	for i := 0; i < maxEvictIterations && c.shardedMap.Mem() > limit; i++ {
+	for i := 0; i < maxEvictIterations && c.memory() > limit; i++ {
 		var (
 			found bool
 			shard *shardNode
@@ -209,10 +219,14 @@ func (c *LRU) runLogDebugInfo() {
 				evictsNumPer5Sec += stat.items
 				evictsMemPer5Sec += stat.mem
 			case <-ticker:
-				log.Debug().Msgf("[lru]: evicted [n: %d, mem: %d bytes] (5s), memory usage: %s (limit: %s), storage len: %d, goroutines: %d.",
+				var m runtime.MemStats
+				runtime.ReadMemStats(&m)
+				log.Debug().Msgf("[lru]: evicted [n: %d, mem: %d bytes] (5s), "+
+					"storage [memUsage: %s, memLimit: %s, len: %d], sys [alloc: %s, totalAlloc: %s, sysAlloc: %s, routines: %d, GC: %s].",
 					evictsNumPer5Sec, evictsMemPer5Sec,
-					utils.FmtMem(c.shardedMap.Mem()), utils.FmtMem(uintptr(c.cfg.MemoryLimit)),
-					c.shardedMap.Len(), runtime.NumGoroutine(),
+					utils.FmtMem(c.memory()), utils.FmtMem(uintptr(c.cfg.MemoryLimit)),
+					c.shardedMap.Len(), utils.FmtMem(uintptr(m.Alloc)), utils.FmtMem(uintptr(m.TotalAlloc)), utils.FmtMem(uintptr(m.Sys)),
+					runtime.NumGoroutine(), strconv.Itoa(int(m.NumGC)),
 				)
 				evictsNumPer5Sec = 0
 				evictsMemPer5Sec = 0

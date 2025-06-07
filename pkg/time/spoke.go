@@ -3,6 +3,7 @@ package time
 import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/list"
 	"time"
+	"unsafe"
 )
 
 type spoke struct {
@@ -15,4 +16,8 @@ type spoke struct {
 
 func (s *spoke) IsReady() bool {
 	return s.mustBeRefreshedAt.After(time.Now())
+}
+
+func (s *spoke) Memory() uintptr {
+	return unsafe.Sizeof(s)
 }

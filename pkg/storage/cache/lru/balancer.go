@@ -1,15 +1,21 @@
 package lru
 
 import (
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/consts"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/list"
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
+	"unsafe"
 )
 
 type shardNode struct {
 	lruList     *list.List[*model.Request] // less used starts at the back
 	memListElem *list.Element[*shardNode]
 	shard       *sharded.Shard[*model.Response]
+}
+
+func (s *shardNode) memory() uintptr {
+	return unsafe.Sizeof(s) + uintptr(s.lruList.Len()*consts.PtrBytesWeigh)
 }
 
 type Balancer struct {
@@ -25,6 +31,14 @@ func NewBalancer(shardedMap *sharded.Map[*model.Response]) *Balancer {
 		memList:    list.New[*shardNode](isListShouldByAThreadSafe),
 		shardedMap: shardedMap,
 	}
+}
+
+func (t *Balancer) memory() uintptr {
+	mem := unsafe.Sizeof(t) + uintptr(t.memList.Len()*consts.PtrBytesWeigh)
+	for _, shard := range t.shards {
+		mem += shard.memory()
+	}
+	return mem
 }
 
 func (t *Balancer) register(shard *sharded.Shard[*model.Response]) {

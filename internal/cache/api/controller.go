@@ -71,11 +71,8 @@ func NewCacheController(
 func (c *CacheController) Index(r *fasthttp.RequestCtx) {
 	f := time.Now()
 
-	ctx, err := util.ExtractCtx(r)
-	if err != nil {
-		ctx = c.ctx
-		log.Warn().Msg(err.Error())
-	}
+	ctx, cancel := context.WithTimeout(c.ctx, 10*time.Second)
+	defer cancel()
 
 	req, err := model.NewRequest(r.QueryArgs())
 	if err != nil {
@@ -108,8 +105,10 @@ func (c *CacheController) Index(r *fasthttp.RequestCtx) {
 	}
 
 	if c.cfg.IsDebugOn() {
-		durCh <- time.Since(f)
-		//log.Info().Msgf("Cache Index took %v", time.Since(f))
+		select {
+		case durCh <- time.Since(f):
+		default:
+		}
 	}
 }
 
