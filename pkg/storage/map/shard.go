@@ -7,34 +7,34 @@ import (
 )
 
 type (
-	Shard[K comparable, V Sizer] struct {
+	Shard[V Sizer] struct {
 		sync.RWMutex
-		id    int
-		items map[K]V
+		id    uint64
+		items map[uint64]V
 		Len   *atomic.Int64
 		mem   *atomic.Uintptr
 	}
 )
 
-func NewShard[K comparable, V Sizer](id int, defaultLen int) *Shard[K, V] {
-	return &Shard[K, V]{
+func NewShard[V Sizer](id uint64, defaultLen int) *Shard[V] {
+	return &Shard[V]{
 		RWMutex: sync.RWMutex{},
 		id:      id,
-		items:   make(map[K]V, defaultLen),
+		items:   make(map[uint64]V, defaultLen),
 		Len:     &atomic.Int64{},
 		mem:     &atomic.Uintptr{},
 	}
 }
 
-func (shard *Shard[K, V]) ID() int {
+func (shard *Shard[V]) ID() uint64 {
 	return shard.id
 }
 
-func (shard *Shard[K, V]) Size() uintptr {
+func (shard *Shard[V]) Size() uintptr {
 	return unsafe.Sizeof(shard) + shard.mem.Load()
 }
 
-func (shard *Shard[K, V]) Set(key K, value V) {
+func (shard *Shard[V]) Set(key uint64, value V) {
 	shard.Lock()
 	shard.items[key] = value
 	shard.Unlock()
@@ -43,14 +43,14 @@ func (shard *Shard[K, V]) Set(key K, value V) {
 	shard.mem.Add(value.Size())
 }
 
-func (shard *Shard[K, V]) Get(key K) (value V, found bool) {
+func (shard *Shard[V]) Get(key uint64) (value V, found bool) {
 	shard.RLock()
 	v, ok := shard.items[key]
 	shard.RUnlock()
 	return v, ok
 }
 
-func (shard *Shard[K, V]) Del(key K) (value V, found bool) {
+func (shard *Shard[V]) Del(key uint64) (value V, found bool) {
 	shard.Lock()
 	v, f := shard.items[key]
 	if f {
