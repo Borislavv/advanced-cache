@@ -9,10 +9,10 @@ Get: ~80ns/op, 20 bytes and zero allocations. Set: ~15ns/op, 105 bytes and zero 
 
 ### Wrk results:
 
-RPS: ~120.000, AVG response duration: 8.3µs.
+RPS: ~140.000, AVG response duration: 7.1µs.
 
-<img width="601" alt="image" src="https://github.com/user-attachments/assets/6be0dd4d-4015-4c89-8724-9f55903146f0" />
-<img width="621" alt="image" src="https://github.com/user-attachments/assets/9f707945-0cae-4f37-89d7-b558a5d2bc9f" />
+<img width="426" alt="image" src="https://github.com/user-attachments/assets/0a3901af-c536-445c-a2bb-dcf9266b3458" />
+
 
 ### Important constants:
 1. sharded.ShardCount - number of map shards (used as a len for array type).
