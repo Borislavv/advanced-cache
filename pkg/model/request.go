@@ -3,24 +3,24 @@ package model
 import (
 	"bytes"
 	"errors"
+	"sync"
+	"sync/atomic"
+
 	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
 	"github.com/valyala/fasthttp"
 	"github.com/zeebo/xxh3"
-	"go.uber.org/atomic"
-	"sync"
 )
 
 const (
-	preallocatedBufferCapacity = 256 // for pre-allocated buffer for concat string literals and url
+	preallocatedBufferCapacity = 256
 	tagBufferCapacity          = 128
 	maxTagsLen                 = 10
 )
 
-var hasherPool = synced.NewBatchPool[*xxh3.Hasher](synced.PreallocationBatchSize, func() *xxh3.Hasher {
-	return xxh3.New()
-})
-
 var (
+	hasherPool = synced.NewBatchPool[*xxh3.Hasher](synced.PreallocationBatchSize, func() *xxh3.Hasher {
+		return xxh3.New()
+	})
 	RequestsPool = synced.NewBatchPool[*Request](synced.PreallocationBatchSize, func() *Request {
 		return &Request{}
 	})
@@ -35,6 +35,47 @@ var (
 
 type FreeResourceFunc func()
 
+var internPool sync.Map
+
+func internBytes(b []byte) []byte {
+	strKey := string(b)
+	if val, ok := internPool.Load(strKey); ok {
+		return val.([]byte)
+	}
+	cp := append([]byte(nil), b...) // делаем копию
+	actual, _ := internPool.LoadOrStore(strKey, cp)
+	return actual.([]byte)
+}
+
+type InternedBytes struct {
+	data []byte
+}
+
+func (k InternedBytes) Equal(other InternedBytes) bool {
+	return bytes.Equal(k.data, other.data)
+}
+
+func (k InternedBytes) Hash() uint64 {
+	return xxh3.Hash(k.data)
+}
+
+func (k InternedBytes) String() string {
+	return string(k.data)
+}
+
+func (k InternedBytes) MarshalBinary() ([]byte, error) {
+	return k.data, nil
+}
+
+func (k InternedBytes) UnmarshalBinary(b []byte) error {
+	k.data = append(k.data[:0], b...)
+	return nil
+}
+
+func (k InternedBytes) GoString() string {
+	return string(k.data)
+}
+
 type Request struct {
 	mu         *sync.RWMutex
 	project    []byte
@@ -43,7 +84,6 @@ type Request struct {
 	tags       [][]byte
 	freeTagsFn FreeResourceFunc
 
-	// calculated fields (calling while init.)
 	uniqueQuery []byte
 	uniqueKey   *atomic.Uint64
 }
@@ -54,13 +94,13 @@ func NewRequest(q *fasthttp.Args) (*Request, error) {
 }
 
 func NewManualRequest(project, domain, language []byte, tags [][]byte, freeTagsFn FreeResourceFunc) (*Request, error) {
-	if project == nil || len(project) == 0 {
+	if len(project) == 0 {
 		return nil, errors.New("project is not specified")
 	}
-	if domain == nil || len(domain) == 0 {
+	if len(domain) == 0 {
 		return nil, errors.New("domain is not specified")
 	}
-	if language == nil || len(language) == 0 {
+	if len(language) == 0 {
 		return nil, errors.New("language is not specified")
 	}
 
@@ -70,23 +110,21 @@ func NewManualRequest(project, domain, language []byte, tags [][]byte, freeTagsF
 		uniqueKey: &atomic.Uint64{},
 	}
 
-	if req.mu == nil {
-		req.mu = new(sync.RWMutex)
-	}
-	if req.uniqueKey == nil {
-		req.uniqueKey = atomic.NewUint64(0)
-	}
+	req.project = internBytes(project)
+	req.domain = internBytes(domain)
+	req.language = internBytes(language)
 
-	req.project = project
-	req.domain = domain
-	req.language = language
+	for i, tag := range tags {
+		if len(tag) > 0 {
+			tags[i] = internBytes(tag)
+		}
+	}
 	req.tags = tags
 	req.freeTagsFn = freeTagsFn
 
 	return req, nil
 }
 
-// extractTags - returns a slice with []byte("${choice name}").
 func extractTags(args *fasthttp.Args) ([][]byte, FreeResourceFunc) {
 	var (
 		nullValue   = []byte("null")
@@ -113,59 +151,54 @@ func extractTags(args *fasthttp.Args) ([][]byte, FreeResourceFunc) {
 func (r *Request) GetProject() []byte {
 	return r.project
 }
+
 func (r *Request) GetDomain() []byte {
 	return r.domain
 }
+
 func (r *Request) GetLanguage() []byte {
 	return r.language
 }
+
 func (r *Request) GetTags() [][]byte {
 	return r.tags
 }
+
 func (r *Request) UniqueKey() uint64 {
 	if key := r.uniqueKey.Load(); key != 0 {
 		return key
 	}
 
-	// calculate capacity
 	bufCap := len(r.project) + len(r.domain) + len(r.language)
 	for _, tag := range r.tags {
 		bufCap += len(tag)
 	}
 
-	// build unique buffer of request data
 	buf := make([]byte, 0, bufCap)
 	buf = append(buf, r.project...)
 	buf = append(buf, r.domain...)
 	buf = append(buf, r.language...)
 	for _, tag := range r.tags {
-		if len(tag) == 0 {
-			continue
-		}
 		buf = append(buf, tag...)
 	}
 
-	// calculate hash of unique []byte
 	hasher := hasherPool.Get()
 	defer hasherPool.Put(hasher)
 	hasher.Reset()
-	if _, err := hasher.Write(buf); err != nil {
-		panic(err)
-	}
+	_, _ = hasher.Write(buf)
 
 	key := hasher.Sum64()
 	r.uniqueKey.Store(key)
-
 	return key
 }
+
 func (r *Request) ToQuery() []byte {
 	r.mu.RLock()
-	uniqueQuery := r.uniqueQuery
-	r.mu.RUnlock()
-
-	if len(uniqueQuery) != 0 {
-		return uniqueQuery
+	if len(r.uniqueQuery) > 0 {
+		defer r.mu.RUnlock()
+		return r.uniqueQuery
 	}
+	r.mu.RUnlock()
 
 	bufCap := preallocatedBufferCapacity + len(r.project) + len(r.domain) + len(r.language)
 	for _, tag := range r.tags {
@@ -208,4 +241,5 @@ func (r *Request) Free() {
 	if cap(r.uniqueQuery) > 0 {
 		r.uniqueQuery = r.uniqueQuery[:0]
 	}
+	RequestsPool.Put(r)
 }

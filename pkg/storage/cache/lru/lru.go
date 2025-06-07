@@ -188,14 +188,16 @@ func (c *LRU) evictUntilWithinLimit() (items int, mem uintptr) {
 			continue
 		}
 
-		if back.Value == nil {
-			shard.lruList.Remove(back)
-			continue
-		}
+		// todo accent
+		//if back.Value == nil {
+		//	shard.lruList.Remove(back)
+		//	continue
+		//}
 
 		if resp, ok := c.del(back.Value); ok {
 			items++
 			mem += resp.Size()
+			resp.Free()
 		} else {
 			shard.lruList.Remove(back)
 		}

@@ -158,6 +158,9 @@ func (l *List[T]) Remove(e *Element[T]) any {
 		l.mu.Lock()
 		defer l.mu.Unlock()
 	}
+	if e == nil {
+		return nil
+	}
 	if e.list == l {
 		// if e.list == l, l must have been initialized when e was inserted
 		// in l or l == nil (e is a zero Element) and l.remove will crash

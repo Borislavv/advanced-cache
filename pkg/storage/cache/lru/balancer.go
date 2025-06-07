@@ -85,6 +85,10 @@ func (t *Balancer) rebalance(n *shardNode) {
 }
 
 func (t *Balancer) move(shardKey uint64, el *list.Element[*model.Request]) {
+	if el == nil {
+		return
+	}
+
 	n := t.shards[shardKey]
 	if n == nil {
 		return
@@ -113,6 +117,7 @@ func (t *Balancer) remove(key uint64, shardKey uint64) (*model.Response, bool) {
 
 func (t *Balancer) del(n *shardNode, resp *model.Response) {
 	n.lruList.Remove(resp.GetListElement())
+	resp.Free()
 }
 
 // mostLoaded returns the first non-empty shard node found in memList.

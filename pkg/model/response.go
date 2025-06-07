@@ -1,6 +1,8 @@
 package model
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/list"
@@ -13,34 +15,76 @@ import (
 	"unsafe"
 )
 
-var ResponsePool = synced.NewBatchPool[*Response](synced.PreallocationBatchSize, func() *Response {
-	return new(Response)
-})
+const gzipThreshold = 1024 // 1KB
+
+var (
+	DataPool = synced.NewBatchPool[*Data](synced.PreallocationBatchSize, func() *Data {
+		return new(Data)
+	})
+	ResponsePool = synced.NewBatchPool[*Response](synced.PreallocationBatchSize, func() *Response {
+		return new(Response)
+	})
+	gzipBufferPool = synced.NewBatchPool[*bytes.Buffer](synced.PreallocationBatchSize, func() *bytes.Buffer {
+		return new(bytes.Buffer)
+	})
+	gzipWriterPool = synced.NewBatchPool[*gzip.Writer](synced.PreallocationBatchSize, func() *gzip.Writer {
+		w, _ := gzip.NewWriterLevel(nil, gzip.BestSpeed)
+		return w
+	})
+)
 
 type ResponseRevalidator = func(ctx context.Context) (data *Data, err error)
 
 type Data struct {
 	statusCode int
+	body       []byte
 	headers    http.Header
-
-	body     []byte
-	freeBody synced.FreeResourceFunc
+	freeBody   synced.FreeResourceFunc
 }
 
 func NewData(statusCode int, headers http.Header, body []byte, freeBody synced.FreeResourceFunc) *Data {
-	return &Data{
+	data := DataPool.Get()
+	*data = Data{
 		headers:    headers,
 		statusCode: statusCode,
-		body:       body,
 		freeBody:   freeBody,
 	}
+
+	if len(body) > gzipThreshold {
+		gzipper := gzipWriterPool.Get()
+		defer gzipWriterPool.Put(gzipper)
+
+		buf := gzipBufferPool.Get()
+		gzipper.Reset(buf)
+
+		_, err := gzipper.Write(body)
+		if err == nil {
+			_ = gzipper.Close()
+			data.body = buf.Bytes()
+			headers.Set("Content-Encoding", "gzip")
+		} else {
+			data.body = body // fallback
+		}
+
+		data.freeBody = func() {
+			freeBody()
+			gzipBufferPool.Put(buf)
+		}
+	} else {
+		data.body = body
+	}
+
+	return data
 }
 
 func (d *Data) Headers() http.Header { return d.headers }
 func (d *Data) StatusCode() int      { return d.statusCode }
 func (d *Data) Body() []byte         { return d.body }
+func (d *Data) Free() {
+	d.freeBody()
+	DataPool.Put(d)
+}
 
-// Response weight is 80 bytes
 type Response struct {
 	/* mutable (pointer change but data are immutable) */
 	data *atomic.Pointer[Data]
@@ -56,7 +100,7 @@ type Response struct {
 	/* immutable */
 	cfg *config.Config
 	/* immutable */
-	revalidator ResponseRevalidator
+	revalidator *atomic.Pointer[ResponseRevalidator]
 }
 
 func NewResponse(
@@ -67,6 +111,7 @@ func NewResponse(
 ) (*Response, error) {
 	resp := ResponsePool.Get()
 
+	// true init.
 	if resp.cfg == nil {
 		resp.cfg = cfg
 	}
@@ -78,7 +123,6 @@ func NewResponse(
 	}
 	if resp.revalidatedAt == nil {
 		resp.revalidatedAt = &atomic.Int64{}
-		resp.revalidatedAt.Store(time.Now().UnixNano())
 	}
 	if resp.listElement == nil {
 		resp.listElement = &atomic.Pointer[list.Element[*Request]]{}
@@ -86,10 +130,15 @@ func NewResponse(
 	if resp.shardKey == nil {
 		resp.shardKey = &atomic.Uint64{}
 	}
+	if resp.revalidator == nil {
+		resp.revalidator = &atomic.Pointer[ResponseRevalidator]{}
+	}
 
+	// reinit.
 	resp.data.Store(data)
 	resp.request.Store(req)
-	resp.revalidator = revalidator
+	resp.revalidator.Store(&revalidator)
+	resp.revalidatedAt.Store(time.Now().UnixNano())
 
 	return resp, nil
 }
@@ -107,7 +156,7 @@ func (r *Response) ShouldBeRevalidated(source *Response) bool {
 }
 
 func (r *Response) Revalidate(ctx context.Context) error {
-	data, err := r.revalidator(ctx)
+	data, err := (*(r.revalidator.Load()))(ctx)
 	if err != nil {
 		return err
 	}
@@ -188,13 +237,12 @@ func (r *Response) Size() uintptr {
 	return uintptr(size)
 }
 
-func (r *Response) Free() *Response {
-	r.data.Load().freeBody()
+func (r *Response) Free() {
+	r.data.Load().Free()
 	r.request.Load().Free()
 
-	r.revalidatedAt.Store(time.Now().UnixNano())
 	r.listElement.Store(nil)
 	r.shardKey.Store(0)
 
-	return r
+	ResponsePool.Put(r)
 }
