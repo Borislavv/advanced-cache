@@ -131,7 +131,6 @@ func (l *List[T]) insertValue(v T, at *Element[T]) *Element[T] {
 func (l *List[T]) remove(e *Element[T]) {
 	e.prev.next = e.next
 	e.next.prev = e.prev
-	*e = Element[T]{}
 	l.elemPool.Put(e)
 	l.len--
 }

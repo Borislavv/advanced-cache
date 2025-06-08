@@ -80,7 +80,8 @@ func (c *CacheController) Index(r *fasthttp.RequestCtx) {
 		return
 	}
 
-	resp, found := c.cache.Get(req)
+	resp, acquire, found := c.cache.Get(req)
+	defer acquire()
 	if !found {
 		resp, err = c.seoRepo.PageData(ctx, req)
 		if err != nil {

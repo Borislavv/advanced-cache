@@ -63,15 +63,24 @@ func NewLRU(ctx context.Context, cfg *config.Config, timeWheel *times.Wheel, sha
 	return lru
 }
 
-func (c *LRU) Get(req *model.Request) (*model.Response, bool) {
+func (c *LRU) get(key uint64, shard uint64) (*model.Response, model.ResponseAcquireFn, bool) {
+	resp, found := c.shardedMap.Get(key, shard)
+	if found {
+		resp.IncRefCount()
+		return resp, func() { resp.DcrRefCount() }, true
+	}
+	return nil, func() {}, false
+}
+
+func (c *LRU) Get(req *model.Request) (*model.Response, model.ResponseAcquireFn, bool) {
 	key := req.UniqueKey()
 	shardKey := c.shardedMap.GetShardKey(key)
-	resp, found := c.shardedMap.Get(key, shardKey)
+	resp, acquire, found := c.get(key, shardKey)
 	if found {
 		c.onFound(shardKey, resp, nil)
-		return resp, true
+		return resp, acquire, true
 	}
-	return nil, false
+	return nil, acquire, false
 }
 
 func (c *LRU) onFound(shardKey uint64, target *model.Response, source *model.Response) {
@@ -86,8 +95,9 @@ func (c *LRU) Set(newResp *model.Response) {
 	shardKey := c.shardedMap.GetShardKey(key)
 	shard := c.shardedMap.Shard(shardKey)
 
-	resp, found := shard.Get(key)
+	resp, acquire, found := c.get(key, shardKey)
 	if found {
+		defer acquire()
 		c.onFound(shardKey, resp, newResp)
 		return
 	}
@@ -108,7 +118,7 @@ func (c *LRU) onSet(key uint64, shard *sharded.Shard[*model.Response], resp *mod
 	c.timeWheel.Add(key, shard.ID(), c.cfg.RevalidateInterval)
 }
 
-func (c *LRU) del(req *model.Request) (*model.Response, bool) {
+func (c *LRU) del(req *model.Request) (resp *model.Response, isHit bool) {
 	key := req.UniqueKey()
 	shardKey := c.shardedMap.GetShardKey(key)
 	return c.balancer.remove(key, shardKey)
@@ -171,6 +181,7 @@ func (c *LRU) evictUntilWithinLimit() (items int, mem uintptr) {
 	const maxEvictIterations = 2048
 	var limit = c.memoryThreshold
 
+loop:
 	for i := 0; i < maxEvictIterations && c.memory() > limit; i++ {
 		var (
 			found bool
@@ -193,12 +204,25 @@ func (c *LRU) evictUntilWithinLimit() (items int, mem uintptr) {
 			continue
 		}
 
-		if resp, ok := c.del(back.Value); ok {
-			items++
-			mem += resp.Size()
+		resp, isHit := c.del(back.Value)
+		if !isHit {
+			continue
+		}
+
+		items++
+		mem += resp.Size()
+
+		trashLoopIters := 0
+		for resp.RefCount() > 0 {
+			if trashLoopIters >= 1000 {
+				log.Warn().Msgf("attempt to free response: trash loop iters. "+
+					"reached limit: 1000, refCount is still not zero: %d, is freed: %d (response leaked)", resp.RefCount(), resp.IsFreed())
+				continue loop
+			}
+			trashLoopIters++
+		}
+		if resp.IsFreed() == 0 {
 			resp.Free()
-		} else {
-			shard.lruList.Remove(back)
 		}
 	}
 

@@ -101,23 +101,20 @@ func (t *Balancer) swap(a, b *list.Element[*shardNode]) {
 	t.memList.SwapValues(a, b)
 }
 
-func (t *Balancer) remove(key uint64, shardKey uint64) (*model.Response, bool) {
-	n := t.shards[shardKey]
+func (t *Balancer) remove(key uint64, shardKey uint64) (resp *model.Response, isHit bool) {
+	node := t.shards[shardKey]
 
 	resp, found := t.shardedMap.Del(key)
 	if !found {
 		return nil, false
 	}
+	defer resp.DcrRefCount()
 
-	t.del(n, resp)
-	t.rebalance(n)
+	node.lruList.Remove(resp.GetListElement())
+
+	t.rebalance(node)
 
 	return resp, true
-}
-
-func (t *Balancer) del(n *shardNode, resp *model.Response) {
-	n.lruList.Remove(resp.GetListElement())
-	resp.Free()
 }
 
 // mostLoaded returns the first non-empty shard node found in memList.

@@ -12,7 +12,7 @@ import (
 )
 
 type Storage interface {
-	Get(req *model.Request) (resp *model.Response, found bool)
+	Get(req *model.Request) (resp *model.Response, fn model.ResponseAcquireFn, found bool)
 	Set(resp *model.Response)
 }
 

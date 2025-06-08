@@ -30,6 +30,7 @@ func NewPooledResponseReader(preallocatedBuffers int) *PooledResponseReader {
  */
 func (r *PooledResponseReader) Read(resp *http.Response) (bode []byte, free FreeResourceFunc, err error) {
 	buf := r.pool.Get()
+	buf.Reset()
 	freeFn := func() { r.pool.Put(buf) }
 	_, err = buf.ReadFrom(resp.Body)
 	if err != nil {

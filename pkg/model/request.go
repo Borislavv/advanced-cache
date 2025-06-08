@@ -1,14 +1,16 @@
+// Переписанная версия model/request.go и model/response.go с упором на безопасный доступ, sync.Pool, без лишних аллокаций.
+
 package model
 
 import (
 	"bytes"
 	"errors"
-	"sync"
-	"sync/atomic"
-
 	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
+	"github.com/rs/zerolog/log"
 	"github.com/valyala/fasthttp"
 	"github.com/zeebo/xxh3"
+	"sync"
+	"sync/atomic"
 )
 
 const (
@@ -21,109 +23,149 @@ var (
 	hasherPool = synced.NewBatchPool[*xxh3.Hasher](synced.PreallocationBatchSize, func() *xxh3.Hasher {
 		return xxh3.New()
 	})
+	slBtsPool = synced.NewBatchPool[*bytes.Buffer](synced.PreallocationBatchSize, func() *bytes.Buffer {
+		return new(bytes.Buffer)
+	})
+	QueryPool = synced.NewBatchPool[*Query](synced.PreallocationBatchSize, func() *Query {
+		return &Query{}
+	})
 	RequestsPool = synced.NewBatchPool[*Request](synced.PreallocationBatchSize, func() *Request {
-		return &Request{}
+		return &Request{
+			query:       &atomic.Pointer[Query]{},
+			uniqueQuery: &atomic.Pointer[bytes.Buffer]{},
+			uniqueKey:   0,
+		}
 	})
 	TagsSlicesPool = synced.NewBatchPool[[][]byte](synced.PreallocationBatchSize, func() [][]byte {
 		batch := make([][]byte, maxTagsLen)
 		for i := range batch {
-			batch[i] = make([]byte, 0, tagBufferCapacity)
+			batch[i] = make([]byte, tagBufferCapacity)
 		}
 		return batch
 	})
 )
 
-type FreeResourceFunc func()
+type Query struct {
+	project, domain, language []byte
+	tags                      [][]byte
+	putTagsInPoolFn           func()
+}
 
-var internPool sync.Map
+func (q *Query) Values() (project []byte, domain []byte, language []byte, tags [][]byte) {
+	return q.project, q.domain, q.language, q.tags
+}
 
-func internBytes(b []byte) []byte {
-	strKey := string(b)
-	if val, ok := internPool.Load(strKey); ok {
-		return val.([]byte)
+func (q *Query) free() {
+	if q.putTagsInPoolFn != nil {
+		q.putTagsInPoolFn()
 	}
-	cp := append([]byte(nil), b...) // делаем копию
-	actual, _ := internPool.LoadOrStore(strKey, cp)
-	return actual.([]byte)
-}
-
-type InternedBytes struct {
-	data []byte
-}
-
-func (k InternedBytes) Equal(other InternedBytes) bool {
-	return bytes.Equal(k.data, other.data)
-}
-
-func (k InternedBytes) Hash() uint64 {
-	return xxh3.Hash(k.data)
-}
-
-func (k InternedBytes) String() string {
-	return string(k.data)
-}
-
-func (k InternedBytes) MarshalBinary() ([]byte, error) {
-	return k.data, nil
-}
-
-func (k InternedBytes) UnmarshalBinary(b []byte) error {
-	k.data = append(k.data[:0], b...)
-	return nil
-}
-
-func (k InternedBytes) GoString() string {
-	return string(k.data)
+	QueryPool.Put(q)
 }
 
 type Request struct {
-	project  []byte
-	domain   []byte
-	language []byte
-	tags     [][]byte
-
-	uniqueKey   *atomic.Uint64
-	uniqueQuery atomic.Pointer[[]byte]
-	freeTagsPtr atomic.Pointer[FreeResourceFunc]
+	query       *atomic.Pointer[Query]
+	uniqueQuery *atomic.Pointer[bytes.Buffer]
+	uniqueKey   uint64
 }
 
-func NewRequest(q *fasthttp.Args) (*Request, error) {
-	tags, freeTagsFn := extractTags(q)
-	return NewManualRequest(q.Peek("project[id]"), q.Peek("domain"), q.Peek("language"), tags, freeTagsFn)
-}
-
-func NewManualRequest(project, domain, language []byte, tags [][]byte, freeTagsFn FreeResourceFunc) (*Request, error) {
-	if len(project) == 0 {
-		return nil, errors.New("project is not specified")
+func NewRequest(args *fasthttp.Args) (*Request, error) {
+	var (
+		project               = internBytes(args.Peek("project[id]"))
+		domain                = internBytes(args.Peek("domain"))
+		language              = internBytes(args.Peek("language"))
+		tags, putTagsInPoolFn = extractTags(args)
+	)
+	if len(project) == 0 || len(domain) == 0 || len(language) == 0 {
+		return nil, errors.New("missing required arguments")
 	}
-	if len(domain) == 0 {
-		return nil, errors.New("domain is not specified")
-	}
-	if len(language) == 0 {
-		return nil, errors.New("language is not specified")
-	}
-
 	req := RequestsPool.Get()
-	*req = Request{
-		uniqueKey: &atomic.Uint64{},
+	query := QueryPool.Get()
+	*query = Query{
+		project:         project,
+		domain:          domain,
+		language:        language,
+		tags:            tags,
+		putTagsInPoolFn: putTagsInPoolFn,
 	}
-
-	req.project = internBytes(project)
-	req.domain = internBytes(domain)
-	req.language = internBytes(language)
-
-	for i, tag := range tags {
-		if len(tag) > 0 {
-			tags[i] = internBytes(tag)
-		}
-	}
-	req.tags = tags
-	req.freeTagsPtr.Store(&freeTagsFn)
-
+	atomic.StoreUint64(&req.uniqueKey, 0)
+	req.uniqueQuery.Store(nil)
+	req.query.Store(query)
 	return req, nil
 }
 
-func extractTags(args *fasthttp.Args) ([][]byte, FreeResourceFunc) {
+func (r *Request) ToQuery() []byte {
+	if q := r.uniqueQuery.Load(); q != nil {
+		if b := q.Bytes(); len(b) > 0 {
+			return b
+		}
+	}
+
+	var project, domain, language, tags = r.query.Load().Values()
+
+	buf := slBtsPool.Get()
+	buf.Reset()
+
+	buf.Write([]byte("?project[id]="))
+	buf.Write(project)
+	buf.Write([]byte("&domain="))
+	buf.Write(domain)
+	buf.Write([]byte("&language="))
+	buf.Write(language)
+
+	var n int
+	for _, tag := range tags {
+		if len(tag) == 0 {
+			continue
+		}
+		buf.Write([]byte("&choice"))
+		buf.Write(bytes.Repeat([]byte("[choice]"), n))
+		buf.Write([]byte("[name]="))
+		buf.Write(tag)
+		n++
+	}
+	buf.Write([]byte("&choice"))
+	buf.Write(bytes.Repeat([]byte("[choice]"), n))
+	buf.Write([]byte("=null"))
+
+	r.uniqueQuery.Store(buf)
+
+	return buf.Bytes()
+}
+
+func (r *Request) UniqueKey() uint64 {
+	if key := atomic.LoadUint64(&r.uniqueKey); key != 0 {
+		return key
+	}
+
+	var project, domain, language, tags = r.query.Load().Values()
+
+	buf := slBtsPool.Get()
+	defer slBtsPool.Put(buf)
+	buf.Reset()
+
+	buf.Write(project)
+	buf.Write(domain)
+	buf.Write(language)
+	for _, tag := range tags {
+		buf.Write(tag)
+	}
+
+	h := hasherPool.Get()
+	defer hasherPool.Put(h)
+
+	h.Reset()
+	_, e := h.Write(buf.Bytes())
+	if e != nil {
+		log.Err(e).Str("buf", string(buf.Bytes())).Msg("failed to compute hash")
+	}
+	key := h.Sum64()
+
+	atomic.StoreUint64(&r.uniqueKey, key)
+
+	return key
+}
+
+func extractTags(args *fasthttp.Args) ([][]byte, func()) {
 	var (
 		nullValue   = []byte("null")
 		choiceValue = []byte("choice")
@@ -139,99 +181,35 @@ func extractTags(args *fasthttp.Args) ([][]byte, FreeResourceFunc) {
 		if !bytes.HasPrefix(key, choiceValue) || bytes.Equal(value, nullValue) || idx >= maxTagsLen {
 			return
 		}
-		tagsSls[idx] = append(tagsSls[idx], value...)
+		tagsSls[idx] = append(tagsSls[idx], internBytes(value)...)
 		idx++
 	})
-
-	return tagsSls[:idx], func() { TagsSlicesPool.Put(tagsSls) }
+	return tagsSls[:idx], func() {
+		TagsSlicesPool.Put(tagsSls)
+	}
 }
 
-func (r *Request) GetProject() []byte {
-	return r.project
-}
+var internPool sync.Map
 
-func (r *Request) GetDomain() []byte {
-	return r.domain
-}
-
-func (r *Request) GetLanguage() []byte {
-	return r.language
-}
-
-func (r *Request) GetTags() [][]byte {
-	return r.tags
-}
-
-func (r *Request) UniqueKey() uint64 {
-	if key := r.uniqueKey.Load(); key != 0 {
-		return key
+func internBytes(b []byte) []byte {
+	strKey := string(b)
+	if val, ok := internPool.Load(strKey); ok {
+		return val.([]byte)
 	}
-
-	bufCap := len(r.project) + len(r.domain) + len(r.language)
-	for _, tag := range r.tags {
-		bufCap += len(tag)
-	}
-
-	buf := make([]byte, 0, bufCap)
-	buf = append(buf, r.project...)
-	buf = append(buf, r.domain...)
-	buf = append(buf, r.language...)
-	for _, tag := range r.tags {
-		buf = append(buf, tag...)
-	}
-
-	hasher := hasherPool.Get()
-	defer hasherPool.Put(hasher)
-	hasher.Reset()
-	_, _ = hasher.Write(buf)
-
-	key := hasher.Sum64()
-	r.uniqueKey.Store(key)
-	return key
-}
-
-func (r *Request) ToQuery() []byte {
-	if cached := r.uniqueQuery.Load(); cached != nil {
-		return *cached
-	}
-
-	bufCap := preallocatedBufferCapacity + len(r.project) + len(r.domain) + len(r.language)
-	for _, tag := range r.tags {
-		bufCap += len(tag)
-	}
-
-	buf := make([]byte, 0, bufCap)
-	buf = append(buf, []byte("?project[id]=")...)
-	buf = append(buf, r.project...)
-	buf = append(buf, []byte("&domain=")...)
-	buf = append(buf, r.domain...)
-	buf = append(buf, []byte("&language=")...)
-	buf = append(buf, r.language...)
-
-	var n int
-	for _, tag := range r.tags {
-		if len(tag) == 0 {
-			continue
-		}
-		buf = append(buf, []byte("&choice")...)
-		buf = append(buf, bytes.Repeat([]byte("[choice]"), n)...)
-		buf = append(buf, []byte("[name]=")...)
-		buf = append(buf, tag...)
-		n++
-	}
-	buf = append(buf, []byte("&choice")...)
-	buf = append(buf, bytes.Repeat([]byte("[choice]"), n)...)
-	buf = append(buf, []byte("=null")...)
-
-	r.uniqueQuery.CompareAndSwap(nil, &buf)
-	return buf
+	actual, _ := internPool.LoadOrStore(strKey, b)
+	return actual.([]byte)
 }
 
 func (r *Request) Free() {
-	if fnPtr := r.freeTagsPtr.Swap(nil); fnPtr != nil && *fnPtr != nil {
-		(*fnPtr)()
+	query := r.query.Load()
+	if query != nil {
+		query.free()
 	}
-	r.uniqueKey.Store(0)
-	r.uniqueQuery.Store(nil)
+
+	buf := r.uniqueQuery.Load()
+	if buf != nil {
+		slBtsPool.Put(buf)
+	}
+
 	RequestsPool.Put(r)
 }
