@@ -17,8 +17,8 @@ import (
 )
 
 var (
-	workersNum     = runtime.GOMAXPROCS(0)
-	evictionStatCh = make(chan evictionStat, workersNum*4)
+	maxEvictors    = runtime.GOMAXPROCS(0)
+	evictionStatCh = make(chan evictionStat, maxEvictors*4)
 	trashList      = list.New[*model.Response](true)
 )
 
@@ -54,8 +54,8 @@ func NewLRU(ctx context.Context, cfg *config.Config, timeWheel *times.Wheel, sha
 		lru.balancer.register(shard)
 	})
 
-	lru.runEvictors()
-	lru.runTrashCollectors()
+	lru.spawnEvictors()
+	lru.runTrashCollector()
 
 	if cfg.IsDebugOn() {
 		lru.runLogDebugInfo()
@@ -64,7 +64,7 @@ func NewLRU(ctx context.Context, cfg *config.Config, timeWheel *times.Wheel, sha
 	return lru
 }
 
-func (c *LRU) Get(req *model.Request) (resp *model.Response, acquire func(), isHit bool) {
+func (c *LRU) Get(req *model.Request) (*model.Response, func(), bool) {
 	key := req.UniqueKey()
 	shardKey := c.shardedMap.GetShardKey(key)
 	resp, found := c.shardedMap.Get(key, shardKey)
@@ -103,28 +103,26 @@ func (c *LRU) del(req *model.Request) (*model.Response, bool) {
 	return c.balancer.remove(key, shardKey)
 }
 
-func (c *LRU) runEvictors() {
-	for seed := 0; seed < workersNum; seed++ {
-		go c.evictor(seed)
+func (c *LRU) spawnEvictors() {
+	for i := 0; i < maxEvictors; i++ {
+		go c.evictor()
 	}
 }
 
-func (c *LRU) evictor(seed int) {
-	ticker := time.NewTicker(time.Millisecond * (15 + time.Duration(seed)))
-	defer ticker.Stop()
+func (c *LRU) evictor() {
 	for {
 		select {
 		case <-c.ctx.Done():
 			return
-		case <-ticker.C:
+		default:
 			if c.shouldEvict() {
 				items, memory := c.evictUntilWithinLimit()
 				if c.cfg.IsDebugOn() && (items > 0 || memory > 0) {
 					evictionStatCh <- evictionStat{items: items, mem: memory}
 				}
 			}
-		default:
 			runtime.Gosched()
+			time.Sleep(time.Millisecond * 25)
 		}
 	}
 }
@@ -163,7 +161,7 @@ loop:
 			if c.cfg.IsDebugOn() {
 				log.Debug().Uint64("key", resp.GetRequest().UniqueKey()).Msg("marking response as doomed")
 			}
-			c.markAsDoomed(resp)
+			markAsDoomed(resp)
 			continue loop
 		}
 		resp.Free()
@@ -171,40 +169,34 @@ loop:
 	return
 }
 
-func (c *LRU) runTrashCollectors() {
-	for seed := 0; seed <= runtime.GOMAXPROCS(0); seed++ {
-		go c.trashCollector(seed)
-	}
-}
-
-func (c *LRU) trashCollector(seed int) {
-	ticker := time.NewTicker(time.Millisecond * (17 + time.Duration(seed)))
-	defer ticker.Stop()
-	for {
-		select {
-		case <-c.ctx.Done():
-			return
-		case <-ticker.C:
-			var freedItems int
-			var freedMem uintptr
-			for el := trashList.Front(); el != nil; {
-				next := el.Next()
-				resp := el.Value
-				if resp.RefCount() == 0 {
-					freedMem += resp.Size()
-					resp.Free()
-					trashList.Remove(el)
-					freedItems++
+func (c *LRU) runTrashCollector() {
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-c.ctx.Done():
+				return
+			case <-ticker.C:
+				var freedItems int
+				var freedMem uintptr
+				for el := trashList.Front(); el != nil; {
+					next := el.Next()
+					resp := el.Value
+					if resp.RefCount() == 0 {
+						freedMem += resp.Size()
+						resp.Free()
+						trashList.Remove(el)
+						freedItems++
+					}
+					el = next
 				}
-				el = next
+				if c.cfg.IsDebugOn() && freedItems > 0 {
+					log.Debug().Msgf("[trash]: freed %d doomed responses (%d bytes)", freedItems, freedMem)
+				}
 			}
-			if c.cfg.IsDebugOn() && freedItems > 0 {
-				log.Debug().Msgf("[trash]: freed %d doomed responses (%d bytes)", freedItems, freedMem)
-			}
-		default:
-			runtime.Gosched()
 		}
-	}
+	}()
 }
 
 func (c *LRU) runLogDebugInfo() {
@@ -235,7 +227,7 @@ func (c *LRU) runLogDebugInfo() {
 	}()
 }
 
-func (c *LRU) markAsDoomed(resp *model.Response) {
+func markAsDoomed(resp *model.Response) {
 	if !resp.IsFreed() {
 		trashList.PushBack(resp)
 		if resp.RefCount() == 0 {
