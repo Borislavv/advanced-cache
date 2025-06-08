@@ -155,11 +155,8 @@ func (c *LRU) memory() uintptr {
 }
 
 func (c *LRU) evictUntilWithinLimit() (items int, mem uintptr) {
-	const maxEvictIterations = 2048
-	var limit = c.memoryThreshold
-
 loop:
-	for i := 0; i < maxEvictIterations && c.memory() > limit; i++ {
+	for c.memory() > c.memoryThreshold {
 		var (
 			found bool
 			shard *shardNode
@@ -189,16 +186,14 @@ loop:
 		items++
 		mem += resp.Size()
 
-		/**
-		 * очень мендленно и вызывает проблемы с производительностью
-		 */
 		trashLoopIters := 0
 		for resp.RefCount() > 0 {
-			if trashLoopIters >= 1000 {
+			if trashLoopIters >= 10000 {
 				log.Warn().Msgf("attempt to free response: trash loop iters. "+
-					"reached limit: 1000, refCount is still not zero: %d, is freed: %d (response leaked)", resp.RefCount(), resp.IsFreed())
+					"reached limit: 10000, refCount is still not zero: %d, is freed: %d (response leaked)", resp.RefCount(), resp.IsFreed())
 				continue loop
 			}
+			runtime.Gosched()
 			trashLoopIters++
 		}
 		if resp.IsFreed() == 0 {
