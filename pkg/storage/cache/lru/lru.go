@@ -26,27 +26,25 @@ type evictionStat struct {
 }
 
 type LRU struct {
-	ctx               context.Context
-	cfg               *config.Config
-	shardedMap        *sharded.Map[*model.Response]
-	timeWheel         *times.Wheel
-	balancer          *Balancer
-	memoryLimit       uintptr
-	memoryThreshold   uintptr
-	evictionTriggerCh chan struct{}
+	ctx             context.Context
+	cfg             *config.Config
+	shardedMap      *sharded.Map[*model.Response]
+	timeWheel       *times.Wheel
+	balancer        *Balancer
+	memoryLimit     uintptr
+	memoryThreshold uintptr
 }
 
 func NewLRU(ctx context.Context, cfg *config.Config, timeWheel *times.Wheel, shardedMap *sharded.Map[*model.Response]) *LRU {
 	const maxMemoryCoefficient uintptr = 98
 
 	lru := &LRU{
-		ctx:               ctx,
-		cfg:               cfg,
-		timeWheel:         timeWheel,
-		shardedMap:        shardedMap,
-		memoryThreshold:   uintptr(float64(cfg.MemoryLimit) * cfg.MemoryFillThreshold),
-		memoryLimit:       (uintptr(cfg.MemoryLimit) / 100) * maxMemoryCoefficient,
-		evictionTriggerCh: make(chan struct{}, maxEvictors),
+		ctx:             ctx,
+		cfg:             cfg,
+		timeWheel:       timeWheel,
+		shardedMap:      shardedMap,
+		memoryThreshold: uintptr(float64(cfg.MemoryLimit) * cfg.MemoryFillThreshold),
+		memoryLimit:     (uintptr(cfg.MemoryLimit) / 100) * maxMemoryCoefficient,
 	}
 
 	lru.balancer = NewBalancer(lru.shardedMap)
@@ -107,12 +105,6 @@ func (c *LRU) Set(newResp *model.Response) {
 
 func (c *LRU) onSet(key uint64, shard *sharded.Shard[*model.Response], resp *model.Response) {
 	resp.SetShardKey(shard.ID())
-
-	respMem := resp.Size()
-	if c.shouldEvict(respMem) {
-		c.triggerEviction(respMem)
-	}
-
 	c.balancer.set(resp)
 	shard.Set(key, resp)
 	c.timeWheel.Add(key, shard.ID(), c.cfg.RevalidateInterval)
@@ -136,22 +128,22 @@ func (c *LRU) spawnEvictor() {
 			select {
 			case <-c.ctx.Done():
 				return
-			case <-c.evictionTriggerCh:
-				items, memory := c.evictUntilWithinLimit()
-				if c.cfg.IsDebugOn() && (items > 0 || memory > 0) {
-					evictionStatCh <- evictionStat{items: items, mem: memory}
+			default:
+				if c.shouldEvict() {
+					items, memory := c.evictUntilWithinLimit()
+					if c.cfg.IsDebugOn() && (items > 0 || memory > 0) {
+						evictionStatCh <- evictionStat{items: items, mem: memory}
+					}
 				}
+				runtime.Gosched()
+				time.Sleep(time.Millisecond * 25)
 			}
 		}
 	}()
 }
 
-func (c *LRU) shouldEvict(respSize uintptr) bool {
-	return c.memory()+respSize > c.memoryThreshold
-}
-
-func (c *LRU) shouldManualEvict(respSize uintptr) bool {
-	return c.memory()+respSize > c.memoryLimit
+func (c *LRU) shouldEvict() bool {
+	return c.memory() > c.memoryThreshold
 }
 
 func (c *LRU) memory() uintptr {
@@ -160,21 +152,6 @@ func (c *LRU) memory() uintptr {
 	mem += c.balancer.memory()
 	mem += c.timeWheel.Memory()
 	return mem
-}
-
-func (c *LRU) triggerEviction(respSize uintptr) {
-	select {
-	case c.evictionTriggerCh <- struct{}{}:
-	default:
-		if c.shouldManualEvict(respSize) {
-			// if async evictor cannot process your request
-			//  otherwise use a manual approach
-			items, memory := c.evictUntilWithinLimit()
-			if c.cfg.IsDebugOn() && (items > 0 || memory > 0) {
-				evictionStatCh <- evictionStat{items: items, mem: memory}
-			}
-		}
-	}
 }
 
 func (c *LRU) evictUntilWithinLimit() (items int, mem uintptr) {
@@ -212,6 +189,9 @@ loop:
 		items++
 		mem += resp.Size()
 
+		/**
+		 * очень мендленно и вызывает проблемы с производительностью
+		 */
 		trashLoopIters := 0
 		for resp.RefCount() > 0 {
 			if trashLoopIters >= 1000 {
