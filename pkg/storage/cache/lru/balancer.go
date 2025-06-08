@@ -108,7 +108,6 @@ func (t *Balancer) remove(key uint64, shardKey uint64) (resp *model.Response, is
 	if !found {
 		return nil, false
 	}
-	defer resp.DcrRefCount()
 
 	node.lruList.Remove(resp.GetListElement())
 

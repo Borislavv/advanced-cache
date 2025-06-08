@@ -29,9 +29,11 @@ func NewPooledResponseReader(preallocatedBuffers int) *PooledResponseReader {
  * Reads response body into a buffer from sync.Pool and returns this buffer when you call "free" response value.
  */
 func (r *PooledResponseReader) Read(resp *http.Response) (bode []byte, free FreeResourceFunc, err error) {
-	buf := r.pool.Get()
-	buf.Reset()
-	freeFn := func() { r.pool.Put(buf) }
+	//buf := r.pool.Get()
+	//buf.Reset()
+	var buf bytes.Buffer
+	//freeFn := func() { r.pool.Put(buf) }
+	freeFn := func() {}
 	_, err = buf.ReadFrom(resp.Body)
 	if err != nil {
 		return nil, freeFn, err

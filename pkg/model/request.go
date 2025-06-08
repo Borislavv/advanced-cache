@@ -23,7 +23,10 @@ var (
 	hasherPool = synced.NewBatchPool[*xxh3.Hasher](synced.PreallocationBatchSize, func() *xxh3.Hasher {
 		return xxh3.New()
 	})
-	slBtsPool = synced.NewBatchPool[*bytes.Buffer](synced.PreallocationBatchSize, func() *bytes.Buffer {
+	keySlBtsPool = synced.NewBatchPool[*bytes.Buffer](synced.PreallocationBatchSize, func() *bytes.Buffer {
+		return new(bytes.Buffer)
+	})
+	querySlBtsPool = synced.NewBatchPool[*bytes.Buffer](synced.PreallocationBatchSize, func() *bytes.Buffer {
 		return new(bytes.Buffer)
 	})
 	QueryPool = synced.NewBatchPool[*Query](synced.PreallocationBatchSize, func() *Query {
@@ -88,21 +91,23 @@ func NewRequest(args *fasthttp.Args) (*Request, error) {
 		putTagsInPoolFn: putTagsInPoolFn,
 	}
 	atomic.StoreUint64(&req.uniqueKey, 0)
-	req.uniqueQuery.Store(nil)
+
+	querySl := req.uniqueQuery.Load()
+	if querySl != nil {
+		req.uniqueQuery.Store(nil)
+	}
 	req.query.Store(query)
 	return req, nil
 }
 
 func (r *Request) ToQuery() []byte {
-	if q := r.uniqueQuery.Load(); q != nil {
-		if b := q.Bytes(); len(b) > 0 {
-			return b
-		}
+	if buffer := r.uniqueQuery.Load(); buffer != nil {
+		return buffer.Bytes()
 	}
 
 	var project, domain, language, tags = r.query.Load().Values()
 
-	buf := slBtsPool.Get()
+	buf := querySlBtsPool.Get()
 	buf.Reset()
 
 	buf.Write([]byte("?project[id]="))
@@ -139,8 +144,8 @@ func (r *Request) UniqueKey() uint64 {
 
 	var project, domain, language, tags = r.query.Load().Values()
 
-	buf := slBtsPool.Get()
-	defer slBtsPool.Put(buf)
+	buf := keySlBtsPool.Get()
+	defer keySlBtsPool.Put(buf)
 	buf.Reset()
 
 	buf.Write(project)
@@ -208,7 +213,7 @@ func (r *Request) Free() {
 
 	buf := r.uniqueQuery.Load()
 	if buf != nil {
-		slBtsPool.Put(buf)
+		querySlBtsPool.Put(buf)
 	}
 
 	RequestsPool.Put(r)

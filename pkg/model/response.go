@@ -115,6 +115,10 @@ type Response struct {
 	shardKey      uint64
 }
 
+func (r *Response) CASIsFreed(from, to int32) bool {
+	return atomic.CompareAndSwapInt32(&r.isFreed, from, to)
+}
+
 func NewResponse(data *Data, req *Request, cfg *config.Config, revalidator ResponseRevalidator) (*Response, error) {
 	resp := ResponsePool.Get()
 	if resp.cfg == nil {
@@ -130,9 +134,12 @@ func NewResponse(data *Data, req *Request, cfg *config.Config, revalidator Respo
 	return resp, nil
 }
 
-func (r *Response) IncRefCount()                             { atomic.AddInt64(&r.refCounter, 1) }
-func (r *Response) DcrRefCount()                             { atomic.AddInt64(&r.refCounter, -1) }
-func (r *Response) RefCount() int64                          { return atomic.LoadInt64(&r.refCounter) }
+func (r *Response) IncRefCount()    { atomic.AddInt64(&r.refCounter, 1) }
+func (r *Response) DcrRefCount()    { atomic.AddInt64(&r.refCounter, -1) }
+func (r *Response) RefCount() int64 { return atomic.LoadInt64(&r.refCounter) }
+func (r *Response) CASRefCount(from, to int64) bool {
+	return atomic.CompareAndSwapInt64(&r.refCounter, from, to)
+}
 func (r *Response) IsFreed() bool                            { return atomic.LoadInt32(&r.isFreed) == 1 }
 func (r *Response) SetShardKey(id uint64)                    { atomic.StoreUint64(&r.shardKey, id) }
 func (r *Response) GetShardKey() uint64                      { return atomic.LoadUint64(&r.shardKey) }

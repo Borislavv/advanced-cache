@@ -18,7 +18,7 @@ import (
 
 var (
 	maxEvictors    = runtime.GOMAXPROCS(0)
-	evictionStatCh = make(chan evictionStat, maxEvictors*4)
+	evictionStatCh = make(chan evictionStat, maxEvictors*100)
 	trashList      = list.New[*model.Response](true)
 )
 
@@ -54,7 +54,7 @@ func NewLRU(ctx context.Context, cfg *config.Config, timeWheel *times.Wheel, sha
 		lru.balancer.register(shard)
 	})
 
-	lru.spawnEvictors()
+	lru.runEvictors()
 	lru.runTrashCollector()
 
 	if cfg.IsDebugOn() {
@@ -103,7 +103,7 @@ func (c *LRU) del(req *model.Request) (*model.Response, bool) {
 	return c.balancer.remove(key, shardKey)
 }
 
-func (c *LRU) spawnEvictors() {
+func (c *LRU) runEvictors() {
 	for i := 0; i < maxEvictors; i++ {
 		go c.evictor()
 	}
@@ -118,11 +118,14 @@ func (c *LRU) evictor() {
 			if c.shouldEvict() {
 				items, memory := c.evictUntilWithinLimit()
 				if c.cfg.IsDebugOn() && (items > 0 || memory > 0) {
-					evictionStatCh <- evictionStat{items: items, mem: memory}
+					select {
+					case evictionStatCh <- evictionStat{items: items, mem: memory}:
+					default:
+					}
 				}
 			}
 			runtime.Gosched()
-			time.Sleep(time.Millisecond * 25)
+			time.Sleep(time.Millisecond * 100)
 		}
 	}
 }
@@ -140,7 +143,6 @@ func (c *LRU) memory() uintptr {
 }
 
 func (c *LRU) evictUntilWithinLimit() (items int, mem uintptr) {
-loop:
 	for c.memory() > c.memoryThreshold {
 		shard, found := c.balancer.mostLoaded()
 		if !found {
@@ -157,21 +159,30 @@ loop:
 		}
 		items++
 		mem += resp.Size()
-		if resp.RefCount() > 0 {
-			if c.cfg.IsDebugOn() {
-				log.Debug().Uint64("key", resp.GetRequest().UniqueKey()).Msg("marking response as doomed")
+		for i := 0; i < 10; i++ {
+			if resp.CASRefCount(1, 0) {
+				resp.Free()
+				continue
 			}
-			markAsDoomed(resp)
-			continue loop
 		}
-		resp.Free()
+		markAsDoomed(resp)
 	}
 	return
 }
 
+func markAsDoomed(resp *model.Response) {
+	if !resp.IsFreed() {
+		if resp.RefCount() == 0 {
+			resp.Free()
+			return
+		}
+		trashList.PushBack(resp)
+	}
+}
+
 func (c *LRU) runTrashCollector() {
 	go func() {
-		ticker := time.NewTicker(1 * time.Second)
+		ticker := time.NewTicker(time.Millisecond * 250)
 		defer ticker.Stop()
 		for {
 			select {
@@ -183,16 +194,24 @@ func (c *LRU) runTrashCollector() {
 				for el := trashList.Front(); el != nil; {
 					next := el.Next()
 					resp := el.Value
-					if resp.RefCount() == 0 {
-						freedMem += resp.Size()
-						resp.Free()
-						trashList.Remove(el)
-						freedItems++
+
+					for i := 0; i < 10; i++ {
+						if resp.CASRefCount(1, 0) {
+							trashList.Remove(el)
+							resp.Free()
+
+							freedMem += resp.Size()
+							freedItems++
+
+							if c.cfg.IsDebugOn() && freedItems > 0 {
+								log.Debug().Msgf("[trash]: freed %d doomed responses (%d bytes)", freedItems, freedMem)
+							}
+
+							continue
+						}
 					}
+
 					el = next
-				}
-				if c.cfg.IsDebugOn() && freedItems > 0 {
-					log.Debug().Msgf("[trash]: freed %d doomed responses (%d bytes)", freedItems, freedMem)
 				}
 			}
 		}
@@ -225,13 +244,4 @@ func (c *LRU) runLogDebugInfo() {
 			}
 		}
 	}()
-}
-
-func markAsDoomed(resp *model.Response) {
-	if !resp.IsFreed() {
-		trashList.PushBack(resp)
-		if resp.RefCount() == 0 {
-			resp.Free()
-		}
-	}
 }

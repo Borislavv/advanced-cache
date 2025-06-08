@@ -5,7 +5,7 @@ import (
 	"sync/atomic"
 )
 
-const PreallocationBatchSize = 1000
+const PreallocationBatchSize = 100
 
 type BatchPool[T any] struct {
 	len       *atomic.Int64
