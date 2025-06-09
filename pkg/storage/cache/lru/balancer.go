@@ -4,6 +4,7 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/list"
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -11,6 +12,10 @@ type shardNode struct {
 	lruList     *list.List[*model.Request] // less used starts at the back
 	memListElem *list.Element[*shardNode]
 	shard       *sharded.Shard[*model.Response]
+}
+
+func (s *shardNode) memory() uintptr {
+	return unsafe.Sizeof(s) + uintptr(atomic.LoadInt64(&s.len)*consts.PtrBytesWeigh)
 }
 
 type Balancer struct {
