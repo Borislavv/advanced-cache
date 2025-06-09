@@ -145,19 +145,12 @@ func (c *LRU) evictUntilWithinLimit() (items int, mem uintptr) {
 			shard.lruList.Remove(back)
 			continue
 		}
-		resp, isHit := c.del(back.Value)
+		freedMem, isHit := c.del(back.Value)
 		if !isHit {
 			continue
 		}
 		items++
-		mem += resp.Size()
-		for i := 0; i < 10; i++ {
-			if resp.CASRefCount(0, -1) {
-				resp.Free()
-				continue
-			}
-		}
-		markAsDoomed(resp)
+		mem += freedMem
 	}
 	return
 }
