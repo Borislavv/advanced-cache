@@ -30,8 +30,9 @@ func (e *Element[T]) Prev() *Element[T] {
 
 // List is a generic doubly linked list implementation with optional thread-safety and element pooling.
 type List[T any] struct {
+	len       int
 	isGuarded bool
-	mu        sync.RWMutex
+	mu        sync.Mutex
 	root      *Element[T]
 	elemPool  *synced.BatchPool[*Element[T]]
 }
@@ -44,168 +45,154 @@ func New[T any](isMustBeListAThreadSafe bool) *List[T] {
 			return &Element[T]{}
 		}),
 	}
-	l.Init()
+	l.init()
 	return l
 }
 
-// Init initializes the internal root sentinel node of the list.
-func (l *List[T]) Init() *List[T] {
+// init initializes or clears list l.
+func (l *List[T]) init() *List[T] {
+	root := l.elemPool.Get()
+	*root = Element[T]{}
+	l.root = root
+	l.root.next = l.root
+	l.root.prev = l.root
+	l.len = 0
+	return l
+}
+
+// Len returns the number of elements of list l.
+// The complexity is O(1).
+func (l *List[T]) Len() int {
 	if l.isGuarded {
 		l.mu.Lock()
 		defer l.mu.Unlock()
 	}
-
-	l.root.next = l.root
-	l.root.prev = l.root
-	return l
+	return l.len
 }
 
-// Front returns the first element in the list.
+func (l *List[T]) SwapValues(a, b *Element[T]) {
+	if l.isGuarded {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+	}
+	a.Value, b.Value = b.Value, a.Value
+}
+
+// Front returns the first element of list l or nil if the list is empty.
 func (l *List[T]) Front() *Element[T] {
 	if l.isGuarded {
 		l.mu.Lock()
 		defer l.mu.Unlock()
 	}
-	if l.root != nil {
-		if next := l.root.next; next != nil {
-			return next
-		}
+	if l.len == 0 {
+		return nil
 	}
-	return nil
+	return l.root.next
 }
 
-// Back returns the last element in the list.
+// Back returns the last element of list l or nil if the list is empty.
 func (l *List[T]) Back() *Element[T] {
 	if l.isGuarded {
 		l.mu.Lock()
 		defer l.mu.Unlock()
 	}
-	if l.root != nil {
-		if prev := l.root.prev; prev != nil {
-			return prev
-		}
+	if l.len == 0 {
+		return nil
 	}
-	return nil
+	return l.root.prev
 }
 
-// insert adds an element e after the element at.
+// insert inserts e after at, increments l.len, and returns e.
 func (l *List[T]) insert(e, at *Element[T]) *Element[T] {
-	e.prev = at
-	e.next = at.next
-	at.next.prev = e
-	at.next = e
+	if at != nil {
+		e.prev = at
+		e.next = at.next
+	}
+
+	if e.prev != nil {
+		e.prev.next = e
+		e.next.prev = e
+	}
+
 	e.list = l
+	l.len++
+
 	return e
 }
 
-// remove disconnects the element from the list and returns it to the pool.
+// insertValue is a convenience wrapper for insert(&Element{Value: v}, at).
+func (l *List[T]) insertValue(v T, at *Element[T]) *Element[T] {
+	el := l.elemPool.Get()
+	*el = Element[T]{Value: v}
+	return l.insert(el, at)
+}
+
+// remove removes e from its list, decrements l.len
 func (l *List[T]) remove(e *Element[T]) {
 	e.prev.next = e.next
 	e.next.prev = e.prev
-	e.next = nil
-	e.prev = nil
-	e.list = nil
 	l.elemPool.Put(e)
+	l.len--
 }
 
-// move relocates element e after element at within the list.
+// move moves e to next to at.
 func (l *List[T]) move(e, at *Element[T]) {
 	if e == at {
 		return
 	}
-
 	e.prev.next = e.next
 	e.next.prev = e.prev
 
 	e.prev = at
 	e.next = at.next
-	at.next.prev = e
-	at.next = e
+	e.prev.next = e
+	e.next.prev = e
 }
 
-// Remove deletes the element from the list and returns its value.
-func (l *List[T]) Remove(e *Element[T]) (v T) {
+// Remove removes e from l if e is an element of list l.
+// It returns the element value e.Value.
+// The element must not be nil.
+func (l *List[T]) Remove(e *Element[T]) any {
 	if l.isGuarded {
 		l.mu.Lock()
 		defer l.mu.Unlock()
 	}
+	if e == nil {
+		return nil
+	}
 	if e.list == l {
-		v = e.Value
+		// if e.list == l, l must have been initialized when e was inserted
+		// in l or l == nil (e is a zero Element) and l.remove will crash
 		l.remove(e)
 	}
-	return
+	return e.Value
 }
 
-// PushFront inserts a value at the front of the list.
+// PushFront inserts a new element e with value v at the front of list l and returns e.
 func (l *List[T]) PushFront(v T) *Element[T] {
 	if l.isGuarded {
 		l.mu.Lock()
 		defer l.mu.Unlock()
 	}
-	elem := l.elemPool.Get()
-	*elem = Element[T]{Value: v}
-	return l.insert(elem, l.root)
+	return l.insertValue(v, l.root)
 }
 
-// PushBack inserts a value at the end of the list.
+// PushBack inserts a new element e with value v at the back of list l and returns e.
 func (l *List[T]) PushBack(v T) *Element[T] {
 	if l.isGuarded {
 		l.mu.Lock()
 		defer l.mu.Unlock()
 	}
-	elem := l.elemPool.Get()
-	*elem = Element[T]{Value: v}
-	return l.insert(elem, l.root.prev)
+	var at *Element[T]
+	if l.root != nil {
+		at = l.root.prev
+	}
+	return l.insertValue(v, at)
 }
 
-// MoveToFront moves the specified element to the front of the list.
-func (l *List[T]) MoveToFront(e *Element[T]) {
-	if l.isGuarded {
-		l.mu.Lock()
-		defer l.mu.Unlock()
-	}
-	if e.list != l || l.root.next == e {
-		return
-	}
-	l.move(e, l.root)
-}
-
-// MoveToBack moves the specified element to the end of the list.
-func (l *List[T]) MoveToBack(e *Element[T]) {
-	if l.isGuarded {
-		l.mu.Lock()
-		defer l.mu.Unlock()
-	}
-	if e.list != l || l.root.prev == e {
-		return
-	}
-	l.move(e, l.root.prev)
-}
-
-// SwapValues swaps the values between two elements.
-func (l *List[T]) SwapValues(e1, e2 *Element[T]) {
-	if l.isGuarded {
-		l.mu.Lock()
-		defer l.mu.Unlock()
-	}
-	e1.Value, e2.Value = e2.Value, e1.Value
-}
-
-// InsertAfter inserts a value after the given element in the list.
-func (l *List[T]) InsertAfter(v T, mark *Element[T]) *Element[T] {
-	if l.isGuarded {
-		l.mu.Lock()
-		defer l.mu.Unlock()
-	}
-	if mark.list != l {
-		return nil
-	}
-	elem := l.elemPool.Get()
-	*elem = Element[T]{Value: v}
-	return l.insert(elem, mark)
-}
-
-// InsertBefore inserts a value before the given element in the list.
+// InsertBefore inserts a new element e with value v immediately before mark and returns e.
+// If mark is not an element of l, the list is not modified.
+// The mark must not be nil.
 func (l *List[T]) InsertBefore(v T, mark *Element[T]) *Element[T] {
 	if l.isGuarded {
 		l.mu.Lock()
@@ -214,12 +201,58 @@ func (l *List[T]) InsertBefore(v T, mark *Element[T]) *Element[T] {
 	if mark.list != l {
 		return nil
 	}
-	elem := l.elemPool.Get()
-	*elem = Element[T]{Value: v}
-	return l.insert(elem, mark.prev)
+	// see comment in List.Remove about initialization of l
+	return l.insertValue(v, mark.prev)
 }
 
-// MoveBefore moves element e before the mark element in the list.
+// InsertAfter inserts a new element e with value v immediately after mark and returns e.
+// If mark is not an element of l, the list is not modified.
+// The mark must not be nil.
+func (l *List[T]) InsertAfter(v T, mark *Element[T]) *Element[T] {
+	if l.isGuarded {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+	}
+	if mark.list != l {
+		return nil
+	}
+	// see comment in List.Remove about initialization of l
+	return l.insertValue(v, mark)
+}
+
+// MoveToFront moves element e to the front of list l.
+// If e is not an element of l, the list is not modified.
+// The element must not be nil.
+func (l *List[T]) MoveToFront(e *Element[T]) {
+	if l.isGuarded {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+	}
+	if e.list != l || l.root.next == e {
+		return
+	}
+	// see comment in List.Remove about initialization of l
+	l.move(e, l.root)
+}
+
+// MoveToBack moves element e to the back of list l.
+// If e is not an element of l, the list is not modified.
+// The element must not be nil.
+func (l *List[T]) MoveToBack(e *Element[T]) {
+	if l.isGuarded {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+	}
+	if e.list != l || l.root.prev == e {
+		return
+	}
+	// see comment in List.Remove about initialization of l
+	l.move(e, l.root.prev)
+}
+
+// MoveBefore moves element e to its new position before mark.
+// If e or mark is not an element of l, or e == mark, the list is not modified.
+// The element and mark must not be nil.
 func (l *List[T]) MoveBefore(e, mark *Element[T]) {
 	if l.isGuarded {
 		l.mu.Lock()
@@ -231,7 +264,9 @@ func (l *List[T]) MoveBefore(e, mark *Element[T]) {
 	l.move(e, mark.prev)
 }
 
-// MoveAfter moves element e after the mark element in the list.
+// MoveAfter moves element e to its new position after mark.
+// If e or mark is not an element of l, or e == mark, the list is not modified.
+// The element and mark must not be nil.
 func (l *List[T]) MoveAfter(e, mark *Element[T]) {
 	if l.isGuarded {
 		l.mu.Lock()
@@ -243,28 +278,26 @@ func (l *List[T]) MoveAfter(e, mark *Element[T]) {
 	l.move(e, mark)
 }
 
-// PushBackList appends a copy of another list to the end of this list.
+// PushBackList inserts a copy of another list at the back of list l.
+// The lists l and other may be the same. They must not be nil.
 func (l *List[T]) PushBackList(other *List[T]) {
 	if l.isGuarded {
 		l.mu.Lock()
 		defer l.mu.Unlock()
 	}
-	for e := other.Front(); e != nil; e = e.Next() {
-		elem := l.elemPool.Get()
-		*elem = Element[T]{Value: e.Value}
-		l.insert(elem, l.root.prev)
+	for i, e := other.Len(), other.Front(); i > 0; i, e = i-1, e.Next() {
+		l.insertValue(e.Value, l.root.prev)
 	}
 }
 
-// PushFrontList prepends a copy of another list to the front of this list.
+// PushFrontList inserts a copy of another list at the front of list l.
+// The lists l and other may be the same. They must not be nil.
 func (l *List[T]) PushFrontList(other *List[T]) {
 	if l.isGuarded {
 		l.mu.Lock()
 		defer l.mu.Unlock()
 	}
-	for e := other.Back(); e != nil; e = e.Prev() {
-		elem := l.elemPool.Get()
-		*elem = Element[T]{Value: e.Value}
-		l.insert(elem, l.root)
+	for i, e := other.Len(), other.Back(); i > 0; i, e = i-1, e.Prev() {
+		l.insertValue(e.Value, l.root)
 	}
 }
