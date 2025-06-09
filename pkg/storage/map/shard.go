@@ -108,7 +108,7 @@ func (shard *Shard[V]) Release(key uint64) (freed uintptr, listElement any, isHi
 		shard.Unlock()
 
 		atomic.AddInt64(&shard.len, -1)
-		atomic.AddUintptr(&shard.mem, -v.Size())
+		atomic.AddUintptr(&shard.mem, ^(v.Size() - 1))
 
 		if v.RefCount() == 0 {
 			v.Release()
