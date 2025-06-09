@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"fmt"
 	"math"
 	"math/rand/v2"
 	"net/http"
@@ -31,7 +32,8 @@ var (
 			request:     &atomic.Pointer[Request]{},
 			listElement: &atomic.Pointer[list.Element[*Request]]{},
 			revalidator: &atomic.Pointer[ResponseRevalidator]{},
-			refCounter:  1,
+			refCounter:  -1,
+			isFreed:     1,
 		}
 	})
 	gzipBufferPool = synced.NewBatchPool[*bytes.Buffer](synced.PreallocationBatchSize, func() *bytes.Buffer {
@@ -66,6 +68,7 @@ func NewData(statusCode int, headers http.Header, body []byte, freeBody synced.F
 		defer gzipWriterPool.Put(gzipper)
 
 		buf := gzipBufferPool.Get()
+		defer gzipBufferPool.Put(buf)
 		buf.Reset()
 		gzipper.Reset(buf)
 
@@ -80,8 +83,6 @@ func NewData(statusCode int, headers http.Header, body []byte, freeBody synced.F
 
 		data.putBodyInPool = func() {
 			freeBody()
-			buf.Reset()
-			gzipBufferPool.Put(buf)
 		}
 	} else {
 		data.body = append(data.body[:0], body...)
@@ -95,9 +96,6 @@ func (d *Data) Body() []byte         { return d.body }
 
 func (d *Data) Free() {
 	d.putBodyInPool()
-	d.body = d.body[:0]
-	d.headers = nil
-	d.putBodyInPool = nil
 	DataPool.Put(d)
 }
 
@@ -129,8 +127,14 @@ func NewResponse(data *Data, req *Request, cfg *config.Config, revalidator Respo
 	resp.revalidator.Store(&revalidator)
 	resp.listElement.Store(nil)
 	atomic.StoreInt64(&resp.revalidatedAt, time.Now().UnixNano())
-	atomic.StoreInt64(&resp.refCounter, 1)
-	atomic.StoreInt32(&resp.isFreed, 0)
+
+	if !resp.CASRefCount(-1, 0) {
+		panic(fmt.Sprintf("response still in use (refCount CAS failed, now is %d)", resp.RefCount()))
+	}
+	if !resp.CASIsFreed(1, 0) {
+		panic(fmt.Sprintf("response still in use (isFreed CAS failed, now is %v)", resp.IsFreed()))
+	}
+
 	return resp, nil
 }
 
@@ -207,8 +211,9 @@ func (r *Response) Size() uintptr {
 }
 
 func (r *Response) Free() {
-	r.data.Load().Free()
-	r.request.Load().Free()
-	ResponsePool.Put(r)
-	atomic.StoreInt32(&r.isFreed, 1)
+	if r.CASIsFreed(0, 1) {
+		r.data.Load().Free()
+		r.request.Load().Free()
+		ResponsePool.Put(r)
+	}
 }

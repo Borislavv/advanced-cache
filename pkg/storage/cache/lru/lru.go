@@ -160,7 +160,7 @@ func (c *LRU) evictUntilWithinLimit() (items int, mem uintptr) {
 		items++
 		mem += resp.Size()
 		for i := 0; i < 10; i++ {
-			if resp.CASRefCount(1, 0) {
+			if resp.CASRefCount(0, -1) {
 				resp.Free()
 				continue
 			}
@@ -171,11 +171,7 @@ func (c *LRU) evictUntilWithinLimit() (items int, mem uintptr) {
 }
 
 func markAsDoomed(resp *model.Response) {
-	if !resp.IsFreed() {
-		if resp.RefCount() == 0 {
-			resp.Free()
-			return
-		}
+	if !resp.IsFreed() && resp.RefCount() > -1 {
 		trashList.PushBack(resp)
 	}
 }
@@ -196,7 +192,7 @@ func (c *LRU) runTrashCollector() {
 					resp := el.Value
 
 					for i := 0; i < 10; i++ {
-						if resp.CASRefCount(1, 0) {
+						if resp.CASRefCount(0, -1) {
 							trashList.Remove(el)
 							resp.Free()
 
