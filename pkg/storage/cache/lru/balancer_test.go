@@ -4,7 +4,9 @@ import (
 	"context"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/mock"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/cache"
+	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
 	"testing"
 	"time"
 )
@@ -21,8 +23,9 @@ var (
 		MemoryFillThreshold:       1,
 		MemoryLimit:               1024 * 100, // 100kb
 	}
-	lru       = NewLRU(context.Background(), cfg)
-	responses = mock.GenerateRandomResponses(cfg, 1000000)
+	shardedMap = sharded.NewMap[*model.Response](cfg.InitStorageLengthPerShard)
+	lru        = NewLRU(context.Background(), cfg, shardedMap)
+	responses  = mock.GenerateRandomResponses(cfg, 1000000)
 )
 
 func TestSwap(t *testing.T) {

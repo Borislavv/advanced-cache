@@ -2,27 +2,24 @@ package storage
 
 import (
 	"context"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
+	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
 	"os"
 	"runtime"
 	"runtime/pprof"
 	"runtime/trace"
-	"strconv"
 	"testing"
 	"time"
 
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/mock"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/cache"
-	"github.com/rs/zerolog/log"
 )
 
-var BenchmarkNum int
-
 func BenchmarkReadFromStorage1000TimesPerIter(b *testing.B) {
-	BenchmarkNum++
-	log.Info().Msg("[" + strconv.Itoa(BenchmarkNum) + "] Started Read Benchmark: " + strconv.Itoa(b.N) + " iterations.")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	ctx := context.Background()
 	cfg := &config.Config{
 		SeoUrl:                    "",
 		RevalidateBeta:            0.3,
@@ -32,14 +29,14 @@ func BenchmarkReadFromStorage1000TimesPerIter(b *testing.B) {
 		MemoryFillThreshold:       0.95,
 		MemoryLimit:               1024 * 1024 * 1024 * 3,
 	}
-	db := New(ctx, cfg)
+	shardedMap := sharded.NewMap[*model.Response](cfg.InitStorageLengthPerShard)
+	db := New(ctx, cfg, shardedMap)
 	responses := mock.GenerateRandomResponses(cfg, b.N+1)
 	for _, resp := range responses {
 		db.Set(resp)
 	}
 	length := len(responses)
 
-	// 🧠 Start profiling
 	cpuFile, _ := os.Create("cpu_read.prof")
 	defer cpuFile.Close()
 	pprof.StartCPUProfile(cpuFile)
@@ -64,8 +61,8 @@ func BenchmarkReadFromStorage1000TimesPerIter(b *testing.B) {
 		i := 0
 		for pb.Next() {
 			for j := 0; j < 1000; j++ {
-				_, releaser, _ := db.Get(responses[(i*j)%length].GetRequest())
-				releaser.Release()
+				_, release, _ := db.Get(responses[(i*j)%length].GetRequest())
+				release.Release()
 			}
 			i += 1000
 		}
@@ -74,15 +71,12 @@ func BenchmarkReadFromStorage1000TimesPerIter(b *testing.B) {
 
 	runtime.GC()
 	pprof.WriteHeapProfile(memFileAfter)
-
-	log.Info().Msg("[" + strconv.Itoa(BenchmarkNum) + "] Read Benchmark done.")
 }
 
 func BenchmarkWriteIntoStorage1000TimesPerIter(b *testing.B) {
-	BenchmarkNum++
-	log.Info().Msg("[" + strconv.Itoa(BenchmarkNum) + "] Started Write Benchmark: " + strconv.Itoa(b.N) + " iterations.")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	ctx := context.Background()
 	cfg := &config.Config{
 		SeoUrl:                    "",
 		RevalidateBeta:            0.3,
@@ -92,7 +86,8 @@ func BenchmarkWriteIntoStorage1000TimesPerIter(b *testing.B) {
 		MemoryFillThreshold:       0.95,
 		MemoryLimit:               1024 * 1024 * 1024 * 3,
 	}
-	db := New(ctx, cfg)
+	shardedMap := sharded.NewMap[*model.Response](cfg.InitStorageLengthPerShard)
+	db := New(ctx, cfg, shardedMap)
 	responses := mock.GenerateRandomResponses(cfg, b.N+1)
 	length := len(responses)
 
@@ -120,8 +115,8 @@ func BenchmarkWriteIntoStorage1000TimesPerIter(b *testing.B) {
 		i := 0
 		for pb.Next() {
 			for j := 0; j < 1000; j++ {
-				_, releaser, _ := db.Get(responses[(i*j)%length].GetRequest())
-				releaser.Release()
+				release := db.Set(responses[(i*j)%length])
+				release.Release()
 			}
 			i += 100
 		}
@@ -130,12 +125,11 @@ func BenchmarkWriteIntoStorage1000TimesPerIter(b *testing.B) {
 
 	runtime.GC()
 	pprof.WriteHeapProfile(memFileAfter)
-
-	log.Info().Msg("[" + strconv.Itoa(BenchmarkNum) + "] Write Benchmark done.")
 }
 
 func BenchmarkGetAllocs(b *testing.B) {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+
 	cfg := &config.Config{
 		RevalidateBeta:            0.3,
 		RevalidateInterval:        time.Hour,
@@ -144,20 +138,24 @@ func BenchmarkGetAllocs(b *testing.B) {
 		MemoryFillThreshold:       0.95,
 		MemoryLimit:               1024 * 1024,
 	}
-	db := New(ctx, cfg)
+
+	shardedMap := sharded.NewMap[*model.Response](cfg.InitStorageLengthPerShard)
+	db := New(ctx, cfg, shardedMap)
 	resp := mock.GenerateRandomResponses(cfg, 1)[0]
 	db.Set(resp)
 	req := resp.GetRequest()
 
 	allocs := testing.AllocsPerRun(100000, func() {
-		_, rel, _ := db.Get(req)
-		rel.Release()
+		db.Get(req)
 	})
 	b.ReportMetric(allocs, "allocs/op")
+
+	cancel()
 }
 
 func BenchmarkSetAllocs(b *testing.B) {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+
 	cfg := &config.Config{
 		RevalidateBeta:            0.3,
 		RevalidateInterval:        time.Hour,
@@ -166,11 +164,15 @@ func BenchmarkSetAllocs(b *testing.B) {
 		MemoryFillThreshold:       0.95,
 		MemoryLimit:               1024 * 1024,
 	}
-	db := New(ctx, cfg)
+
+	shardedMap := sharded.NewMap[*model.Response](cfg.InitStorageLengthPerShard)
+	db := New(ctx, cfg, shardedMap)
 	resp := mock.GenerateRandomResponses(cfg, 1)[0]
 
 	allocs := testing.AllocsPerRun(100000, func() {
-		db.Set(resp).Release()
+		db.Set(resp)
 	})
 	b.ReportMetric(allocs, "allocs/op")
+
+	cancel()
 }
