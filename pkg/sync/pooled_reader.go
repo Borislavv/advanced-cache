@@ -35,5 +35,5 @@ func (r *PooledResponseReader) Read(resp *http.Response) (bode []byte, free Free
 	if err != nil {
 		return nil, freeFn, err
 	}
-	return buf.Bytes()[:], freeFn, nil
+	return buf.Bytes(), freeFn, nil
 }
