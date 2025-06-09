@@ -5,17 +5,19 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/list"
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
+	"sync/atomic"
 	"unsafe"
 )
 
 type shardNode struct {
+	len         int64
 	lruList     *list.List[*model.Request] // less used starts at the back
 	memListElem *list.Element[*shardNode]
 	shard       *sharded.Shard[*model.Response]
 }
 
 func (s *shardNode) memory() uintptr {
-	return unsafe.Sizeof(s) + uintptr(s.lruList.Len()*consts.PtrBytesWeigh)
+	return unsafe.Sizeof(s) + uintptr(atomic.LoadInt64(&s.len)*consts.PtrBytesWeigh)
 }
 
 type Balancer struct {
@@ -34,7 +36,7 @@ func NewBalancer(shardedMap *sharded.Map[*model.Response]) *Balancer {
 }
 
 func (t *Balancer) memory() uintptr {
-	mem := unsafe.Sizeof(t) + uintptr(t.memList.Len()*consts.PtrBytesWeigh)
+	mem := unsafe.Sizeof(t) + uintptr(sharded.ShardCount*consts.PtrBytesWeigh)
 	for _, shard := range t.shards {
 		mem += shard.memory()
 	}
@@ -66,6 +68,7 @@ func (t *Balancer) set(resp *model.Response) *list.Element[*model.Request] {
 }
 
 func (t *Balancer) push(n *shardNode, resp *model.Response) *list.Element[*model.Request] {
+	atomic.AddInt64(&n.len, 1)
 	el := n.lruList.PushFront(resp.GetRequest())
 	resp.SetListElement(el)
 	return el
@@ -110,6 +113,8 @@ func (t *Balancer) remove(key uint64, shardKey uint64) (resp *model.Response, is
 	}
 
 	node.lruList.Remove(resp.GetListElement())
+
+	atomic.AddInt64(&node.len, -1)
 
 	t.rebalance(node)
 

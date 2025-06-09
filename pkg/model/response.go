@@ -128,9 +128,12 @@ func NewResponse(data *Data, req *Request, cfg *config.Config, revalidator Respo
 	resp.listElement.Store(nil)
 	atomic.StoreInt64(&resp.revalidatedAt, time.Now().UnixNano())
 
-	if !resp.CASRefCount(-1, 0) {
+	if resp.RefCount() < 0 {
+		atomic.StoreInt64(&resp.refCounter, 0)
+	} else {
 		panic(fmt.Sprintf("response still in use (refCount CAS failed, now is %d)", resp.RefCount()))
 	}
+
 	if !resp.CASIsFreed(1, 0) {
 		panic(fmt.Sprintf("response still in use (isFreed CAS failed, now is %v)", resp.IsFreed()))
 	}
@@ -211,9 +214,9 @@ func (r *Response) Size() uintptr {
 }
 
 func (r *Response) Free() {
-	if r.CASIsFreed(0, 1) {
-		r.data.Load().Free()
-		r.request.Load().Free()
-		ResponsePool.Put(r)
-	}
+	//if r.CASIsFreed(0, 1) {
+	//	r.data.Load().Free()
+	//	r.request.Load().Free()
+	//	ResponsePool.Put(r)
+	//}
 }
