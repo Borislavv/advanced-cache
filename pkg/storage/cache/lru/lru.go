@@ -71,25 +71,29 @@ func (c *LRU) Get(req *model.Request) (*model.Response, *sharded.Releaser[*model
 	return nil, releaser, false
 }
 
-func (c *LRU) Set(resp *model.Response) *sharded.Releaser[*model.Response] {
+func (c *LRU) Set(new *model.Response) *sharded.Releaser[*model.Response] {
 	var (
-		key      = resp.GetRequest().Key()
-		shardKey = resp.GetRequest().ShardKey()
+		key      = new.GetRequest().Key()
+		shardKey = new.GetRequest().ShardKey()
 		shard    = c.shardedMap.Shard(shardKey)
 	)
 
 	existing, releaser, found := c.shardedMap.Get(key, shardKey)
 	if found {
-		existing.IncRefCount()
-		existing.SetData(resp.GetData())
-		c.balancer.move(shardKey, existing.GetListElement())
+		c.update(existing, new)
 		return releaser
 	}
 
-	c.balancer.set(resp)
-	shard.Set(key, resp)
+	c.balancer.set(new)
+	shard.Set(key, new)
 
 	return releaser
+}
+
+func (c *LRU) update(existing, new *model.Response) {
+	existing.IncRefCount()
+	existing.SetData(new.GetData())
+	c.balancer.move(new.GetRequest().ShardKey(), existing.GetListElement())
 }
 
 func (c *LRU) del(req *model.Request) (freedMem uintptr, isHit bool) {
@@ -118,7 +122,7 @@ func (c *LRU) evictor() {
 				}
 			}
 			runtime.Gosched()
-			time.Sleep(time.Millisecond * 100)
+			time.Sleep(time.Millisecond * 250)
 		}
 	}
 }
