@@ -7,45 +7,41 @@ import (
 
 const ShardCount uint64 = 4096
 
-type Keyer interface {
-	~int | ~int8 | ~int16 | ~int32 | ~int64 | ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | uintptr
-}
-
 type Sizer interface {
 	Size() uintptr
 }
 
 type (
-	Map[K Keyer, V Sizer] struct {
-		shards [ShardCount]*Shard[K, V]
+	Map[V Sizer] struct {
+		shards [ShardCount]*Shard[V]
 	}
 )
 
-func NewMap[K Keyer, V Sizer](defaultLen int) *Map[K, V] {
-	m := &Map[K, V]{}
+func NewMap[V Sizer](defaultLen int) *Map[V] {
+	m := &Map[V]{}
 	for id := uint64(0); id < ShardCount; id++ {
-		m.shards[id] = NewShard[K, V](id, defaultLen)
+		m.shards[id] = NewShard[V](id, defaultLen)
 	}
 	return m
 }
 
-func (smap *Map[K, V]) GetShardKey(key K) K {
+func (smap *Map[V]) GetShardKey(key uint64) uint64 {
 	return key % ShardCount
 }
 
-func (smap *Map[K, V]) Set(key K, value V) {
+func (smap *Map[V]) Set(key uint64, value V) {
 	smap.Shard(key).Set(key, value)
 }
 
-func (smap *Map[K, V]) Get(key K, shardKey K) (value V, found bool) {
+func (smap *Map[V]) Get(key uint64, shardKey uint64) (value V, found bool) {
 	return smap.shards[shardKey].Get(key)
 }
 
-func (smap *Map[K, V]) Del(key K) (value V, found bool) {
+func (smap *Map[V]) Del(key uint64) (value V, found bool) {
 	return smap.Shard(key).Del(key)
 }
 
-func (shard *Shard[K, V]) Walk(fn func(K, V), lockWrite bool) {
+func (shard *Shard[V]) Walk(fn func(uint64, V), lockWrite bool) {
 	if lockWrite {
 		shard.Lock()
 		defer shard.Unlock()
@@ -58,35 +54,35 @@ func (shard *Shard[K, V]) Walk(fn func(K, V), lockWrite bool) {
 	}
 }
 
-func (smap *Map[K, V]) Shard(key K) *Shard[K, V] {
+func (smap *Map[V]) Shard(key uint64) *Shard[V] {
 	return smap.shards[smap.GetShardKey(key)]
 }
 
-func (smap *Map[K, V]) Walk(fn func(K, V), lockWrite bool) {
+func (smap *Map[V]) Walk(fn func(uint64, V), lockWrite bool) {
 	var wg sync.WaitGroup
-	wg.Add(ShardCount)
+	wg.Add(int(ShardCount))
 	defer wg.Wait()
 	for key, shard := range smap.shards {
-		go func(k int, s *Shard[K, V]) {
+		go func(k int, s *Shard[V]) {
 			defer wg.Done()
 			shard.Walk(fn, lockWrite)
 		}(key, shard)
 	}
 }
 
-func (smap *Map[K, V]) WalkShards(fn func(key int, shard *Shard[K, V])) {
+func (smap *Map[V]) WalkShards(fn func(key uint64, shard *Shard[V])) {
 	var wg sync.WaitGroup
-	wg.Add(ShardCount)
+	wg.Add(int(ShardCount))
 	defer wg.Wait()
 	for k, s := range smap.shards {
-		go func(key int, shard *Shard[K, V]) {
+		go func(key uint64, shard *Shard[V]) {
 			defer wg.Done()
 			fn(key, shard)
-		}(k, s)
+		}(uint64(k), s)
 	}
 }
 
-func (smap *Map[K, V]) Mem() uintptr {
+func (smap *Map[V]) Mem() uintptr {
 	var mem uintptr
 	for _, shard := range smap.shards {
 		mem += shard.mem.Load()
@@ -94,7 +90,7 @@ func (smap *Map[K, V]) Mem() uintptr {
 	return unsafe.Sizeof(smap) + mem
 }
 
-func (smap *Map[K, V]) Len() int64 {
+func (smap *Map[V]) Len() int64 {
 	var length int64
 	for _, shard := range smap.shards {
 		length += shard.Len.Load()
