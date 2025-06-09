@@ -2,16 +2,15 @@ package lru
 
 import (
 	"context"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
+	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
 	"github.com/rs/zerolog/log"
 	"runtime"
 	"strconv"
+	"sync/atomic"
 	"time"
-	"unsafe"
-
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
-	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
 )
 
 var (
@@ -29,8 +28,9 @@ type LRU struct {
 	cfg             *config.Config
 	shardedMap      *sharded.Map[*model.Response]
 	balancer        *Balancer
-	memoryLimit     uintptr
-	memoryThreshold uintptr
+	mem             int64
+	memoryLimit     int64
+	memoryThreshold int64
 }
 
 func NewLRU(ctx context.Context, cfg *config.Config, shardedMap *sharded.Map[*model.Response]) *LRU {
@@ -38,8 +38,8 @@ func NewLRU(ctx context.Context, cfg *config.Config, shardedMap *sharded.Map[*mo
 		ctx:             ctx,
 		cfg:             cfg,
 		shardedMap:      shardedMap,
-		memoryThreshold: uintptr(float64(cfg.MemoryLimit) * cfg.MemoryFillThreshold),
-		memoryLimit:     uintptr(cfg.MemoryLimit)/100 - 1,
+		memoryThreshold: int64(float64(cfg.MemoryLimit) * cfg.MemoryFillThreshold),
+		memoryLimit:     int64(cfg.MemoryLimit)/100 - 1,
 	}
 
 	lru.balancer = NewBalancer(lru.shardedMap)
@@ -80,11 +80,13 @@ func (c *LRU) touch(existing *model.Response) {
 }
 
 func (c *LRU) update(existing, new *model.Response) {
+	atomic.AddInt64(&c.mem, int64(existing.Size()-new.Size()))
 	c.touch(existing)
 	c.balancer.move(new.GetRequest().ShardKey(), existing.GetListElement())
 }
 
 func (c *LRU) set(new *model.Response) {
+	atomic.AddInt64(&c.mem, int64(new.Size()))
 	c.balancer.set(new)
 	c.shardedMap.Set(new.GetRequest().Key(), new)
 }
@@ -120,18 +122,11 @@ func (c *LRU) evictor() {
 }
 
 func (c *LRU) shouldEvict() bool {
-	return c.memory() > c.memoryThreshold
-}
-
-func (c *LRU) memory() uintptr {
-	mem := unsafe.Sizeof(c)
-	mem += c.shardedMap.Mem()
-	mem += c.balancer.memory()
-	return mem
+	return atomic.LoadInt64(&c.mem) >= c.memoryThreshold
 }
 
 func (c *LRU) evictUntilWithinLimit() (items int, mem uintptr) {
-	for c.memory() > c.memoryThreshold {
+	for atomic.LoadInt64(&c.mem) > c.memoryThreshold {
 		shard, found := c.balancer.mostLoaded()
 		if !found {
 			break
@@ -169,7 +164,7 @@ func (c *LRU) runLogDebugInfo() {
 				log.Debug().Msgf("[lru]: evicted [n: %d, mem: %d bytes] (5s), "+
 					"storage [memUsage: %s, memLimit: %s, len: %d], sys [alloc: %s, totalAlloc: %s, sysAlloc: %s, routines: %d, GC: %s]",
 					evictsNumPer5Sec, evictsMemPer5Sec,
-					utils.FmtMem(c.memory()), utils.FmtMem(uintptr(c.cfg.MemoryLimit)),
+					utils.FmtMem(uintptr(atomic.LoadInt64(&c.mem))), utils.FmtMem(uintptr(c.cfg.MemoryLimit)),
 					c.shardedMap.Len(), utils.FmtMem(uintptr(m.Alloc)), utils.FmtMem(uintptr(m.TotalAlloc)), utils.FmtMem(uintptr(m.Sys)),
 					runtime.NumGoroutine(), strconv.Itoa(int(m.NumGC)))
 				evictsNumPer5Sec = 0

@@ -3,7 +3,6 @@ package sharded
 import (
 	"sync"
 	"sync/atomic"
-	"unsafe"
 )
 
 const ShardCount uint64 = 4096
@@ -97,14 +96,6 @@ func (smap *Map[V]) WalkShards(fn func(key uint64, shard *Shard[V])) {
 			fn(key, shard)
 		}(uint64(k), s)
 	}
-}
-
-func (smap *Map[V]) Mem() uintptr {
-	var mem uintptr
-	for _, shard := range smap.shards {
-		mem += atomic.LoadUintptr(&shard.mem)
-	}
-	return unsafe.Sizeof(smap) + mem
 }
 
 func (smap *Map[V]) Len() int64 {

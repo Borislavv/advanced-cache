@@ -14,7 +14,7 @@ type (
 		releaserPool *synced.BatchPool[*Releaser[V]]
 		id           uint64
 		len          int64
-		mem          uintptr
+		mem          int64
 	}
 	Releaser[V Keyer] struct {
 		val   V
@@ -68,7 +68,7 @@ func (shard *Shard[V]) ID() uint64 {
 }
 
 func (shard *Shard[V]) Size() uintptr {
-	return unsafe.Sizeof(shard) + atomic.LoadUintptr(&shard.mem)
+	return unsafe.Sizeof(shard) + uintptr(atomic.LoadInt64(&shard.mem))
 }
 
 func (shard *Shard[V]) Len() int {
@@ -83,7 +83,7 @@ func (shard *Shard[V]) Set(key uint64, value V) *Releaser[V] {
 	shard.Unlock()
 
 	atomic.AddInt64(&shard.len, 1)
-	atomic.AddUintptr(&shard.mem, value.Size())
+	atomic.AddInt64(&shard.mem, int64(value.Size()))
 
 	// if someone already could take this item and mark it as doomed (almost impossible but any way)
 	return NewReleaser(value, shard.releaserPool)
@@ -108,7 +108,7 @@ func (shard *Shard[V]) Release(key uint64) (freed uintptr, listElement any, isHi
 		shard.Unlock()
 
 		atomic.AddInt64(&shard.len, -1)
-		atomic.AddUintptr(&shard.mem, ^(v.Size() - 1))
+		atomic.AddInt64(&shard.mem, -int64(v.Size()))
 
 		if v.RefCount() == 0 {
 			v.Release()
