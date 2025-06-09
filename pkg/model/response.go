@@ -13,9 +13,14 @@ import (
 	"unsafe"
 )
 
-var ResponsePool = synced.NewBatchPool[*Response](synced.PreallocationBatchSize, func() *Response {
-	return new(Response)
-})
+var (
+	dataPool = synced.NewBatchPool[*Data](synced.PreallocationBatchSize, func() *Data {
+		return new(Data)
+	})
+	responsePool = synced.NewBatchPool[*Response](synced.PreallocationBatchSize, func() *Response {
+		return new(Response)
+	})
+)
 
 type Data struct {
 	statusCode int
@@ -26,17 +31,28 @@ type Data struct {
 }
 
 func NewData(statusCode int, headers http.Header, body []byte, freeBody synced.FreeResourceFunc) *Data {
-	return &Data{
-		headers:     headers,
-		statusCode:  statusCode,
-		body:        body,
-		releaseBody: freeBody,
-	}
+	data := dataPool.Get()
+	data.statusCode = statusCode
+	data.headers = headers
+	data.body = body
+	data.releaseBody = freeBody
+	return data
 }
 
 func (d *Data) Headers() http.Header { return d.headers }
 func (d *Data) StatusCode() int      { return d.statusCode }
 func (d *Data) Body() []byte         { return d.body }
+func (d *Data) clear() {
+	d.statusCode = 0
+	d.headers = nil
+	d.body = nil
+	d.releaseBody = nil
+}
+func (d *Data) Release() {
+	d.releaseBody()
+	d.clear()
+	dataPool.Put(d)
+}
 
 // Response weight is 80 bytes
 type Response struct {
@@ -56,7 +72,7 @@ type Response struct {
 }
 
 func NewResponse(data *Data, req *Request, cfg *config.Config, revalidator func(ctx context.Context) (data *Data, err error)) (*Response, error) {
-	return ResponsePool.Get().init().clear().setUp(cfg, data, req, revalidator), nil
+	return responsePool.Get().init().clear().setUp(cfg, data, req, revalidator), nil
 }
 
 func (r *Response) init() *Response {
@@ -206,9 +222,9 @@ func (r *Response) Size() uintptr {
 }
 
 func (r *Response) Release() bool {
-	r.data.Load().releaseBody()
+	r.data.Load().Release()
 	r.request.Load().Release()
 	r.clear()
-	ResponsePool.Put(r)
+	responsePool.Put(r)
 	return true
 }
