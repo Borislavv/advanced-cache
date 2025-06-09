@@ -32,7 +32,7 @@ func (e *Element[T]) Prev() *Element[T] {
 type List[T any] struct {
 	len       int
 	isGuarded bool
-	mu        sync.Mutex
+	mu        *sync.Mutex
 	root      *Element[T]
 	elemPool  *synced.BatchPool[*Element[T]]
 }
