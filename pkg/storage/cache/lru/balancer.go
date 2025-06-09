@@ -84,19 +84,12 @@ func (t *Balancer) remove(key uint64, shardKey uint64) (freedMem uintptr, isHit 
 	return freed, true
 }
 
-func (t *Balancer) mostLoadedList(percentage int) []*shardNode {
-	shardsNum := (int(sharded.ShardCount) / 100) * percentage
-	if shardsNum <= 0 {
-		shardsNum = 1
+// mostLoaded returns the first non-empty shard node found in memList.
+func (t *Balancer) mostLoaded() (*shardNode, bool) {
+	for cur := t.memList.Front(); cur != nil; cur = cur.Next() {
+		if cur.Value != nil && cur.Value.shard.Len() > 0 {
+			return cur.Value, true
+		}
 	}
-
-	i := 0
-	shards := make([]*shardNode, 0, shardsNum)
-	cur := t.memList.Front()
-	for cur != nil && i < shardsNum {
-		shards = append(shards, cur.Value)
-		cur = cur.Next()
-		i++
-	}
-	return shards
+	return nil, false
 }

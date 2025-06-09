@@ -71,6 +71,10 @@ func (shard *Shard[V]) Size() uintptr {
 	return unsafe.Sizeof(shard) + atomic.LoadUintptr(&shard.mem)
 }
 
+func (shard *Shard[V]) Len() int {
+	return int(atomic.LoadInt64(&shard.len))
+}
+
 func (shard *Shard[V]) Set(key uint64, value V) *Releaser[V] {
 	value.StoreRefCount(1)
 
