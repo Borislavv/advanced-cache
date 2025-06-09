@@ -11,15 +11,12 @@ import (
 
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/list"
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
-	times "github.com/Borislavv/traefik-http-cache-plugin/pkg/time"
 )
 
 var (
 	maxEvictors    = runtime.GOMAXPROCS(0)
 	evictionStatCh = make(chan evictionStat, maxEvictors*100)
-	trashList      = list.New[*model.Response](true)
 )
 
 type evictionStat struct {
@@ -31,19 +28,17 @@ type LRU struct {
 	ctx             context.Context
 	cfg             *config.Config
 	shardedMap      *sharded.Map[*model.Response]
-	timeWheel       *times.Wheel
 	balancer        *Balancer
 	memoryLimit     uintptr
 	memoryThreshold uintptr
 }
 
-func NewLRU(ctx context.Context, cfg *config.Config, timeWheel *times.Wheel, shardedMap *sharded.Map[*model.Response]) *LRU {
+func NewLRU(ctx context.Context, cfg *config.Config, shardedMap *sharded.Map[*model.Response]) *LRU {
 	const maxMemoryCoefficient uintptr = 98
 
 	lru := &LRU{
 		ctx:             ctx,
 		cfg:             cfg,
-		timeWheel:       timeWheel,
 		shardedMap:      shardedMap,
 		memoryThreshold: uintptr(float64(cfg.MemoryLimit) * cfg.MemoryFillThreshold),
 		memoryLimit:     (uintptr(cfg.MemoryLimit) / 100) * maxMemoryCoefficient,
@@ -55,8 +50,6 @@ func NewLRU(ctx context.Context, cfg *config.Config, timeWheel *times.Wheel, sha
 	})
 
 	lru.runEvictors()
-	lru.runTrashCollector()
-
 	if cfg.IsDebugOn() {
 		lru.runLogDebugInfo()
 	}
@@ -64,43 +57,43 @@ func NewLRU(ctx context.Context, cfg *config.Config, timeWheel *times.Wheel, sha
 	return lru
 }
 
-func (c *LRU) Get(req *model.Request) (*model.Response, func(), bool) {
-	key := req.UniqueKey()
-	shardKey := c.shardedMap.GetShardKey(key)
-	resp, found := c.shardedMap.Get(key, shardKey)
+func (c *LRU) Get(req *model.Request) (*model.Response, *sharded.Releaser[*model.Response], bool) {
+	var (
+		key      = req.Key()
+		shardKey = req.ShardKey()
+	)
+	resp, releaser, found := c.shardedMap.Get(key, shardKey)
 	if found {
 		resp.IncRefCount()
 		c.balancer.move(shardKey, resp.GetListElement())
-		return resp, func() { resp.DcrRefCount() }, true
+		return resp, releaser, true
 	}
-	return nil, func() {}, false
+	return nil, releaser, false
 }
 
-func (c *LRU) Set(resp *model.Response) {
-	key := resp.GetRequest().UniqueKey()
-	shardKey := c.shardedMap.GetShardKey(key)
-	shard := c.shardedMap.Shard(shardKey)
+func (c *LRU) Set(resp *model.Response) *sharded.Releaser[*model.Response] {
+	var (
+		key      = resp.GetRequest().Key()
+		shardKey = resp.GetRequest().ShardKey()
+		shard    = c.shardedMap.Shard(shardKey)
+	)
 
-	existing, found := c.shardedMap.Get(key, shardKey)
+	existing, releaser, found := c.shardedMap.Get(key, shardKey)
 	if found {
 		existing.IncRefCount()
-		defer existing.DcrRefCount()
 		existing.SetData(resp.GetData())
 		c.balancer.move(shardKey, existing.GetListElement())
-		return
+		return releaser
 	}
 
-	resp.SetShardKey(shard.ID())
-	el := c.balancer.set(resp)
-	resp.SetListElement(el)
+	c.balancer.set(resp)
 	shard.Set(key, resp)
-	c.timeWheel.Add(key, shard.ID(), c.cfg.RevalidateInterval)
+
+	return releaser
 }
 
-func (c *LRU) del(req *model.Request) (*model.Response, bool) {
-	key := req.UniqueKey()
-	shardKey := c.shardedMap.GetShardKey(key)
-	return c.balancer.remove(key, shardKey)
+func (c *LRU) del(req *model.Request) (freedMem uintptr, isHit bool) {
+	return c.balancer.remove(req.Key(), req.ShardKey())
 }
 
 func (c *LRU) runEvictors() {
@@ -138,7 +131,6 @@ func (c *LRU) memory() uintptr {
 	mem := unsafe.Sizeof(c)
 	mem += c.shardedMap.Mem()
 	mem += c.balancer.memory()
-	mem += c.timeWheel.Memory()
 	return mem
 }
 

@@ -41,34 +41,22 @@ func (t *Balancer) set(resp *model.Response) *shardNode {
 	return node
 }
 
+// moves shards between neighbors (biggest in the front)
 func (t *Balancer) rebalance(n *shardNode) {
 	curr := n.memListElem
 	if curr == nil {
 		return
 	}
-	curSize := curr.Value.shard.Size()
-	for prev := curr.Prev(); prev != nil; prev = curr.Prev() {
-		if curSize <= prev.Value.shard.Size() {
-			break
-		}
-		t.memList.SwapValues(curr, prev)
-		curr = prev
-	}
-	for next := curr.Next(); next != nil; next = curr.Next() {
-		if curSize >= next.Value.shard.Size() {
-			break
-		}
+	next := curr.Next()
+	for next != nil && curr.Value.shard.Size() < next.Value.shard.Size() {
 		t.memList.SwapValues(curr, next)
 		curr = next
+		next = curr.Next()
 	}
 }
 
 func (t *Balancer) move(shardKey uint64, el *list.Element[*model.Request]) {
 	t.shards[shardKey].lruList.MoveToFront(el)
-}
-
-func (t *Balancer) swap(a, b *list.Element[*shardNode]) {
-	t.memList.SwapValues(a, b)
 }
 
 func (t *Balancer) remove(key uint64, shardKey uint64) (freedMem uintptr, isHit bool) {
