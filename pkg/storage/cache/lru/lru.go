@@ -28,7 +28,7 @@ type LRU struct {
 	shardedMap        *sharded.Map[*model.Response]
 	balancer          *Balancer
 	evictionThreshold uintptr
-	evictionTriggerCh chan struct{}
+	//evictionTriggerCh chan struct{}
 }
 
 func NewLRU(ctx context.Context, cfg *config.Config) *LRU {
@@ -37,7 +37,7 @@ func NewLRU(ctx context.Context, cfg *config.Config) *LRU {
 		cfg:               cfg,
 		shardedMap:        sharded.NewMap[*model.Response](cfg.InitStorageLengthPerShard),
 		evictionThreshold: uintptr(float64(cfg.MemoryLimit) * cfg.MemoryFillThreshold),
-		evictionTriggerCh: make(chan struct{}, maxEvictors),
+		//evictionTriggerCh: make(chan struct{}, maxEvictors),
 	}
 
 	lru.balancer = NewBalancer(lru.shardedMap)
@@ -45,7 +45,7 @@ func NewLRU(ctx context.Context, cfg *config.Config) *LRU {
 		lru.balancer.register(shard)
 	})
 
-	lru.spawnEvictors()
+	//lru.spawnEvictors()
 
 	if cfg.IsDebugOn() {
 		lru.runLogDebugInfo()
@@ -100,9 +100,9 @@ func (c *LRU) Set(newResp *model.Response) *sharded.Releaser[*model.Response] {
 }
 
 func (c *LRU) onSet(key uint64, shard *sharded.Shard[*model.Response], resp *model.Response) {
-	if c.shouldEvict(resp.Size()) {
-		c.evict()
-	}
+	//if c.shouldEvict(resp.Size()) {
+	//	c.evict()
+	//}
 
 	shard.Set(key, resp)
 
@@ -122,20 +122,20 @@ func (c *LRU) spawnEvictors() {
 func (c *LRU) spawnEvictor() {
 	go func() {
 		for {
-			select {
-			case <-c.ctx.Done():
-				return
-			case <-c.evictionTriggerCh:
-				num, memory := c.evictMem()
-				if c.cfg.IsDebugOn() {
-					if num > 0 || memory > 0 {
-						evictionStatCh <- evictionStat{
-							items: num,
-							mem:   memory,
-						}
-					}
-				}
-			}
+			//select {
+			//case <-c.ctx.Done():
+			//	return
+			//case <-c.evictionTriggerCh:
+			//	num, memory := c.evictMem()
+			//	if c.cfg.IsDebugOn() {
+			//		if num > 0 || memory > 0 {
+			//			evictionStatCh <- evictionStat{
+			//				items: num,
+			//				mem:   memory,
+			//			}
+			//		}
+			//	}
+			//}
 		}
 	}()
 }
@@ -145,18 +145,14 @@ func (c *LRU) shouldEvict(respSize uintptr) bool {
 }
 
 func (c *LRU) evict() {
-	select {
-	case c.evictionTriggerCh <- struct{}{}:
-	default:
-		// if async evictor cannot process your request
-		//otherwise use a manual approach
-		items, memory := c.evictMem()
-		if c.cfg.IsDebugOn() {
-			if items > 0 || memory > 0 {
-				evictionStatCh <- evictionStat{
-					items: items,
-					mem:   memory,
-				}
+	// if async evictor cannot process your request
+	//otherwise use a manual approach
+	items, memory := c.evictMem()
+	if c.cfg.IsDebugOn() {
+		if items > 0 || memory > 0 {
+			evictionStatCh <- evictionStat{
+				items: items,
+				mem:   memory,
 			}
 		}
 	}
