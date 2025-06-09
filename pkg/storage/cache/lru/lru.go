@@ -58,42 +58,38 @@ func NewLRU(ctx context.Context, cfg *config.Config, shardedMap *sharded.Map[*mo
 }
 
 func (c *LRU) Get(req *model.Request) (*model.Response, *sharded.Releaser[*model.Response], bool) {
-	var (
-		key      = req.Key()
-		shardKey = req.ShardKey()
-	)
-	resp, releaser, found := c.shardedMap.Get(key, shardKey)
+	resp, releaser, found := c.shardedMap.Get(req.Key(), req.ShardKey())
 	if found {
-		resp.IncRefCount()
-		c.balancer.move(shardKey, resp.GetListElement())
+		c.touch(resp)
 		return resp, releaser, true
 	}
-	return nil, releaser, false
+	return nil, nil, false
 }
 
 func (c *LRU) Set(new *model.Response) *sharded.Releaser[*model.Response] {
-	var (
-		key      = new.GetRequest().Key()
-		shardKey = new.GetRequest().ShardKey()
-		shard    = c.shardedMap.Shard(shardKey)
-	)
-
-	existing, releaser, found := c.shardedMap.Get(key, shardKey)
+	existing, releaser, found := c.shardedMap.Get(new.GetRequest().Key(), new.GetRequest().ShardKey())
 	if found {
 		c.update(existing, new)
 		return releaser
 	}
+	c.set(new)
+	return nil
+}
 
-	c.balancer.set(new)
-	shard.Set(key, new)
-
-	return releaser
+func (c *LRU) touch(existing *model.Response) {
+	existing.IncRefCount()
+	c.balancer.move(existing.GetRequest().ShardKey(), existing.GetListElement())
+	log.Info().Msg("found")
 }
 
 func (c *LRU) update(existing, new *model.Response) {
-	existing.IncRefCount()
-	existing.SetData(new.GetData())
+	c.touch(existing)
 	c.balancer.move(new.GetRequest().ShardKey(), existing.GetListElement())
+}
+
+func (c *LRU) set(new *model.Response) {
+	c.balancer.set(new)
+	c.shardedMap.Set(new.GetRequest().Key(), new)
 }
 
 func (c *LRU) del(req *model.Request) (freedMem uintptr, isHit bool) {
