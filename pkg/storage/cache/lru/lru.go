@@ -117,7 +117,6 @@ func (c *LRU) evictor() {
 					}
 				}
 			}
-			runtime.Gosched()
 			time.Sleep(time.Millisecond * 250)
 		}
 	}
