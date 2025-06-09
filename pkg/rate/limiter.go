@@ -3,7 +3,6 @@ package rate
 import (
 	"context"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
-	"runtime"
 	"time"
 )
 
@@ -41,8 +40,6 @@ func spawnTokenProvider(ctx context.Context, limit, init int) chan struct{} {
 				return
 			case <-t:
 				q <- struct{}{}
-			default:
-				runtime.Gosched()
 			}
 		}
 	}()
