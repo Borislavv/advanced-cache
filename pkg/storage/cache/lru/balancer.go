@@ -4,6 +4,7 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/list"
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
+	"unsafe"
 )
 
 type shardNode struct {
@@ -80,4 +81,12 @@ func (t *Balancer) mostLoaded() (*shardNode, bool) {
 		}
 	}
 	return nil, false
+}
+
+func (t *Balancer) memory() uintptr {
+	mem := unsafe.Sizeof(t) + uintptr(sharded.ShardCount*consts.PtrBytesWeigh)
+	for _, shard := range t.shards {
+		mem += shard.memory()
+	}
+	return mem
 }
