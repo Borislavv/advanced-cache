@@ -2,6 +2,7 @@ package sharded
 
 import (
 	"sync"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -9,6 +10,13 @@ const ShardCount uint64 = 4096
 
 type Releasable interface {
 	Release() bool
+	RefCount() int64
+	IncRefCount() int64
+	CASRefCount(old, new int64) bool
+	StoreRefCount(new int64)
+	IsDoomed() bool
+	MarkAsDoomed() bool
+	ListElement() any
 }
 
 type Sizer interface {
@@ -34,24 +42,20 @@ func NewMap[V Keyer](defaultLen int) *Map[V] {
 	return m
 }
 
-func (smap *Map[V]) GetShardKey(key uint64) uint64 {
+func MapShardKey(key uint64) uint64 {
 	return key % ShardCount
 }
 
-func (smap *Map[V]) Set(key uint64, value V) {
-	smap.Shard(key).Set(key, value)
+func (smap *Map[V]) Set(key uint64, value V) (release func()) {
+	return smap.Shard(key).Set(key, value)
 }
 
-func (smap *Map[V]) Get(key uint64, shardKey uint64) (value V, found bool) {
+func (smap *Map[V]) Get(key uint64, shardKey uint64) (value V, release func(), found bool) {
 	return smap.shards[shardKey].Get(key)
 }
 
-func (smap *Map[V]) Release(key uint64) (ok bool) {
+func (smap *Map[V]) Release(key uint64) (freed uintptr, listElem any, ok bool) {
 	return smap.Shard(key).Release(key)
-}
-
-func (smap *Map[V]) Del(key uint64) (value V, found bool) {
-	return smap.Shard(key).Del(key)
 }
 
 func (shard *Shard[V]) Walk(fn func(uint64, V), lockWrite bool) {
@@ -68,7 +72,7 @@ func (shard *Shard[V]) Walk(fn func(uint64, V), lockWrite bool) {
 }
 
 func (smap *Map[V]) Shard(key uint64) *Shard[V] {
-	return smap.shards[smap.GetShardKey(key)]
+	return smap.shards[MapShardKey(key)]
 }
 
 func (smap *Map[V]) Walk(fn func(uint64, V), lockWrite bool) {
@@ -98,7 +102,7 @@ func (smap *Map[V]) WalkShards(fn func(key uint64, shard *Shard[V])) {
 func (smap *Map[V]) Mem() uintptr {
 	var mem uintptr
 	for _, shard := range smap.shards {
-		mem += shard.mem.Load()
+		mem += atomic.LoadUintptr(&shard.mem)
 	}
 	return unsafe.Sizeof(smap) + mem
 }
@@ -106,7 +110,7 @@ func (smap *Map[V]) Mem() uintptr {
 func (smap *Map[V]) Len() int64 {
 	var length int64
 	for _, shard := range smap.shards {
-		length += shard.Len.Load()
+		length += atomic.LoadInt64(&shard.len)
 	}
 	return length
 }

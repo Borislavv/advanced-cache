@@ -18,14 +18,14 @@ type Config struct {
 	//  - beta = 0.5 — regular, good for start value
 	//  - beta = 1.0 — aggressive refreshing
 	//  - beta = 0.0 — disables refreshing
-	RevalidateBeta                   float64       `mapstructure:"REVALIDATE_BETA"`
-	RevalidateInterval               time.Duration `mapstructure:"REVALIDATE_INTERVAL"`
-	InitStorageLengthPerShard        int           `mapstructure:"INIT_STORAGE_LEN_PER_SHARD"`
-	EvictionAlgo                     string        `mapstructure:"EVICTION_ALGO"`
-	MemoryFillThreshold              float64       `mapstructure:"MEMORY_FILL_THRESHOLD"`
-	MemoryLimit                      uint          `mapstructure:"MEMORY_LIMIT"`
-	LivenessProbeTimeout             time.Duration `mapstructure:"LIVENESS_PROBE_FAILED_TIMEOUT"`
-	RefreshEvictionDurationThreshold time.Duration // calculates on load
+	RevalidateBeta            float64       `mapstructure:"REVALIDATE_BETA"`
+	RevalidateInterval        time.Duration `mapstructure:"REVALIDATE_INTERVAL"`
+	InitStorageLengthPerShard int           `mapstructure:"INIT_STORAGE_LEN_PER_SHARD"`
+	EvictionAlgo              string        `mapstructure:"EVICTION_ALGO"`
+	MemoryFillThreshold       float64       `mapstructure:"MEMORY_FILL_THRESHOLD"`
+	MemoryLimit               uint          `mapstructure:"MEMORY_LIMIT"`
+	LivenessProbeTimeout      time.Duration `mapstructure:"LIVENESS_PROBE_FAILED_TIMEOUT"`
+	RefreshDurationThreshold  time.Duration // calculates on load
 }
 
 func (c *Config) IsProdEnv() bool {

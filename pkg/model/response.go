@@ -17,22 +17,20 @@ var ResponsePool = synced.NewBatchPool[*Response](synced.PreallocationBatchSize,
 	return new(Response)
 })
 
-type ResponseRevalidator = func(ctx context.Context) (data *Data, err error)
-
 type Data struct {
 	statusCode int
 	headers    http.Header
 
-	body     []byte
-	freeBody synced.FreeResourceFunc
+	body        []byte
+	releaseBody synced.FreeResourceFunc
 }
 
 func NewData(statusCode int, headers http.Header, body []byte, freeBody synced.FreeResourceFunc) *Data {
 	return &Data{
-		headers:    headers,
-		statusCode: statusCode,
-		body:       body,
-		freeBody:   freeBody,
+		headers:     headers,
+		statusCode:  statusCode,
+		body:        body,
+		releaseBody: freeBody,
 	}
 }
 
@@ -42,66 +40,68 @@ func (d *Data) Body() []byte         { return d.body }
 
 // Response weight is 80 bytes
 type Response struct {
-	/* mutable (pointer change but data are immutable) */
-	data *atomic.Pointer[Data]
-	/* mutable (pointer change but data are immutable) */
 	request *atomic.Pointer[Request]
-	/* mutable */
-	revalidatedAt *atomic.Int64 // UnixNano
-	/* mutable */
+
+	data        *atomic.Pointer[Data]
 	listElement *atomic.Pointer[list.Element[*Request]]
+	revalidator func(ctx context.Context) (data *Data, err error)
 
-	/* immutable */
-	shardKey uint64
-	/* immutable */
-	cfg *config.Config
-	/* immutable */
-	revalidator ResponseRevalidator
+	refCount int64
+	isDoomed int64
 
-	refCount    int64
-	isReleasing int64
-	isFreed     int64
+	beta               int64 // float64(0.7) * 100 = 70
+	maxStaleDuration   int64 // UnixNano
+	revalidateInterval int64 // UnixNano
+	revalidatedAt      int64 // UnixNano
 }
 
-func NewResponse(
-	data *Data,
-	req *Request,
-	cfg *config.Config,
-	revalidator ResponseRevalidator,
-) (*Response, error) {
-	resp := ResponsePool.Get()
-
-	if resp.cfg == nil {
-		resp.cfg = cfg
-	}
-	if resp.request == nil {
-		resp.request = &atomic.Pointer[Request]{}
-	}
-	if resp.data == nil {
-		resp.data = &atomic.Pointer[Data]{}
-	}
-	if resp.revalidatedAt == nil {
-		resp.revalidatedAt = &atomic.Int64{}
-		resp.revalidatedAt.Store(time.Now().UnixNano())
-	}
-	if resp.listElement == nil {
-		resp.listElement = &atomic.Pointer[list.Element[*Request]]{}
-	}
-
-	resp.data.Store(data)
-	resp.request.Store(req)
-	resp.revalidator = revalidator
-
-	return resp, nil
+func NewResponse(data *Data, req *Request, cfg *config.Config, revalidator func(ctx context.Context) (data *Data, err error)) (*Response, error) {
+	return ResponsePool.Get().init().clear().setUp(cfg, data, req, revalidator), nil
 }
 
-func (r *Response) StartReleasing() bool {
-	return atomic.CompareAndSwapInt64(&r.isReleasing, 0, 1)
-}
-func (r *Response) StopReleasing() bool {
-	return atomic.CompareAndSwapInt64(&r.isReleasing, 1, 0)
+func (r *Response) init() *Response {
+	if r.request == nil {
+		r.request = &atomic.Pointer[Request]{}
+	}
+	if r.data == nil {
+		r.data = &atomic.Pointer[Data]{}
+	}
+	if r.listElement == nil {
+		r.listElement = &atomic.Pointer[list.Element[*Request]]{}
+	}
+	return r
 }
 
+func (r *Response) setUp(cfg *config.Config, data *Data, req *Request, revalidator func(ctx context.Context) (data *Data, err error)) *Response {
+	r.data.Store(data)
+	r.request.Store(req)
+	r.revalidator = revalidator
+	r.revalidatedAt = time.Now().Unix()
+	r.beta = int64(cfg.RevalidateBeta * 100)
+	r.revalidateInterval = cfg.RevalidateInterval.Nanoseconds()
+	r.maxStaleDuration = cfg.RefreshDurationThreshold.Nanoseconds()
+	return r
+}
+
+func (r *Response) clear() *Response {
+	r.revalidator = nil
+	r.refCount = 0
+	r.isDoomed = 0
+	r.revalidatedAt = 0
+	r.maxStaleDuration = 0
+	r.revalidateInterval = 0
+	r.beta = 0
+	r.listElement.Store(nil)
+	r.request.Store(nil)
+	r.data.Store(nil)
+	return r
+}
+func (r *Response) IsDoomed() bool {
+	return atomic.LoadInt64(&r.isDoomed) == 1
+}
+func (r *Response) MarkAsDoomed() bool {
+	return atomic.CompareAndSwapInt64(&r.isDoomed, 0, 1)
+}
 func (r *Response) RefCount() int64 {
 	return atomic.LoadInt64(&r.refCount)
 }
@@ -111,15 +111,21 @@ func (r *Response) IncRefCount() int64 {
 func (r *Response) DecRefCount() int64 {
 	return atomic.AddInt64(&r.refCount, -1)
 }
+func (r *Response) CASRefCount(old, new int64) bool {
+	return atomic.CompareAndSwapInt64(&r.refCount, old, new)
+}
+func (r *Response) StoreRefCount(new int64) {
+	atomic.StoreInt64(&r.refCount, new)
+}
 
 func (r *Response) ShouldBeRevalidated(source *Response) bool {
 	if source != nil {
 		return false
 	}
 
-	age := time.Since(time.Unix(0, r.revalidatedAt.Load()))
-	if age > r.cfg.RefreshEvictionDurationThreshold {
-		return rand.Float64() >= math.Exp(-r.cfg.RevalidateBeta*float64(age)/float64(r.cfg.RevalidateInterval))
+	age := time.Since(time.Unix(0, atomic.LoadInt64(&r.revalidatedAt))).Nanoseconds()
+	if age > r.maxStaleDuration {
+		return rand.Float64() >= math.Exp((float64(-r.beta)/100)*float64(age)/float64(r.revalidateInterval))
 	}
 	return false
 }
@@ -130,12 +136,16 @@ func (r *Response) Revalidate(ctx context.Context) error {
 		return err
 	}
 	r.data.Store(data)
-	r.revalidatedAt.Store(time.Now().UnixNano())
+	atomic.StoreInt64(&r.revalidatedAt, time.Now().UnixNano())
 	return nil
 }
 
 func (r *Response) GetRequest() *Request {
 	return r.request.Load()
+}
+
+func (r *Response) ListElement() any {
+	return r.listElement.Load()
 }
 
 func (r *Response) GetListElement() *list.Element[*Request] {
@@ -144,14 +154,6 @@ func (r *Response) GetListElement() *list.Element[*Request] {
 
 func (r *Response) SetListElement(el *list.Element[*Request]) {
 	r.listElement.Store(el)
-}
-
-func (r *Response) GetShardKey() uint64 {
-	return atomic.LoadUint64(&r.shardKey)
-}
-
-func (r *Response) SetShardKey(shardKey uint64) {
-	atomic.StoreUint64(&r.shardKey, shardKey)
 }
 
 func (r *Response) GetData() *Data {
@@ -171,7 +173,7 @@ func (r *Response) GetHeaders() http.Header {
 }
 
 func (r *Response) GetRevalidatedAt() time.Time {
-	return time.Unix(0, r.revalidatedAt.Load())
+	return time.Unix(0, atomic.LoadInt64(&r.revalidatedAt))
 }
 func (r *Response) Size() uintptr {
 	var size = int(unsafe.Sizeof(r))
@@ -204,25 +206,9 @@ func (r *Response) Size() uintptr {
 }
 
 func (r *Response) Release() bool {
-	r.Free()
+	r.data.Load().releaseBody()
+	r.request.Load().Release()
+	r.clear()
+	ResponsePool.Put(r)
 	return true
-}
-
-func (r *Response) Free() {
-	if atomic.CompareAndSwapInt64(&r.isFreed, 0, 1) {
-		r.data.Load().freeBody()
-		r.request.Load().Free()
-
-		r.revalidatedAt.Store(time.Now().UnixNano())
-		atomic.StoreUint64(&r.shardKey, 0)
-		r.listElement.Store(nil)
-		r.request.Store(nil)
-		r.data.Store(nil)
-
-		r.StopReleasing()
-		if !atomic.CompareAndSwapInt64(&r.isFreed, 1, 0) {
-			panic("impossible (no one can be here else)")
-		}
-		ResponsePool.Put(r)
-	}
 }

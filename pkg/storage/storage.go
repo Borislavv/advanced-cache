@@ -10,8 +10,8 @@ import (
 )
 
 type Storage interface {
-	Get(req *model.Request) (resp *model.Response, found bool)
-	Set(resp *model.Response)
+	Get(req *model.Request) (resp *model.Response, release func(), isHit bool)
+	Set(resp *model.Response) (release func())
 }
 
 type AlgoStorage struct {

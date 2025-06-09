@@ -8,21 +8,21 @@ import (
 
 type (
 	Shard[V Keyer] struct {
-		sync.RWMutex
-		id    uint64
+		*sync.RWMutex
 		items map[uint64]V
-		Len   *atomic.Int64
-		mem   *atomic.Uintptr
+		id    uint64
+		len   int64
+		mem   uintptr
 	}
 )
 
 func NewShard[V Keyer](id uint64, defaultLen int) *Shard[V] {
 	return &Shard[V]{
-		RWMutex: sync.RWMutex{},
-		id:      id,
+		RWMutex: &sync.RWMutex{},
 		items:   make(map[uint64]V, defaultLen),
-		Len:     &atomic.Int64{},
-		mem:     &atomic.Uintptr{},
+		id:      id,
+		len:     0,
+		mem:     0,
 	}
 }
 
@@ -31,46 +31,64 @@ func (shard *Shard[V]) ID() uint64 {
 }
 
 func (shard *Shard[V]) Size() uintptr {
-	return unsafe.Sizeof(shard) + shard.mem.Load()
+	return unsafe.Sizeof(shard) + atomic.LoadUintptr(&shard.mem)
 }
 
-func (shard *Shard[V]) Set(key uint64, value V) {
+func (shard *Shard[V]) Set(key uint64, value V) (release func()) {
+	value.StoreRefCount(1)
+
 	shard.Lock()
 	shard.items[key] = value
 	shard.Unlock()
 
-	shard.Len.Add(1)
-	shard.mem.Add(value.Size())
+	atomic.AddInt64(&shard.len, 1)
+	atomic.AddUintptr(&shard.mem, value.Size())
+
+	return func() {
+		// if someone already could take this item and mark it as doomed (almost impossible but any way)
+		if old := value.RefCount(); value.CASRefCount(old, old-1) {
+			if old == 1 && value.IsDoomed() {
+				value.Release()
+			}
+		}
+	}
 }
 
-func (shard *Shard[V]) Get(key uint64) (value V, found bool) {
+func (shard *Shard[V]) Get(key uint64) (val V, release func(), isHit bool) {
 	shard.RLock()
-	v, ok := shard.items[key]
+	value, ok := shard.items[key]
 	shard.RUnlock()
-	return v, ok
+	if ok {
+		value.IncRefCount()
+		return value, func() {
+			if old := value.RefCount(); value.CASRefCount(old, old-1) {
+				if old == 1 && value.IsDoomed() {
+					value.Release()
+				}
+			}
+		}, true
+	}
+	return value, func() {}, false
 }
 
-func (shard *Shard[V]) Del(key uint64) (value V, found bool) {
+func (shard *Shard[V]) Release(key uint64) (freed uintptr, listElement any, isHit bool) {
 	shard.Lock()
-	v, f := shard.items[key]
-	if f {
+	v, ok := shard.items[key]
+	if ok {
 		delete(shard.items, key)
-		shard.mem.Add(-v.Size())
-		shard.Len.Add(-1)
-	}
-	shard.Unlock()
-	return v, f
-}
+		shard.Unlock()
 
-func (shard *Shard[V]) Release(key uint64) bool {
-	shard.Lock()
-	v, f := shard.items[key]
-	if f {
-		delete(shard.items, key)
-		shard.mem.Add(-v.Size())
-		shard.Len.Add(-1)
-		return v.Release()
+		atomic.AddInt64(&shard.len, -1)
+		atomic.AddUintptr(&shard.mem, -v.Size())
+
+		if v.RefCount() == 0 {
+			v.Release()
+		} else {
+			v.MarkAsDoomed()
+		}
+
+		return v.Size(), v.ListElement(), true
 	}
 	shard.Unlock()
-	return f
+	return 0, nil, false
 }

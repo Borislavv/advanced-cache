@@ -3,11 +3,11 @@ package model
 import (
 	"bytes"
 	"errors"
+	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
 	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
 	"github.com/valyala/fasthttp"
 	"github.com/zeebo/xxh3"
-	"go.uber.org/atomic"
-	"sync"
+	"sync/atomic"
 )
 
 const (
@@ -16,15 +16,27 @@ const (
 	maxTagsLen                 = 10
 )
 
-var hasherPool = synced.NewBatchPool[*xxh3.Hasher](synced.PreallocationBatchSize, func() *xxh3.Hasher {
-	return xxh3.New()
-})
-
 var (
-	RequestsPool = synced.NewBatchPool[*Request](synced.PreallocationBatchSize, func() *Request {
-		return &Request{}
+	hasherPool = synced.NewBatchPool[*xxh3.Hasher](synced.PreallocationBatchSize, func() *xxh3.Hasher {
+		return xxh3.New()
 	})
-	TagsSlicesPool = synced.NewBatchPool[[][]byte](synced.PreallocationBatchSize, func() [][]byte {
+	requestsPool = synced.NewBatchPool[*Request](synced.PreallocationBatchSize, func() *Request {
+		r := &Request{
+			project:     nil,
+			domain:      nil,
+			language:    nil,
+			tags:        nil,
+			releaseFn:   nil,
+			uniqueQuery: make([]byte, 0, preallocatedBufferCapacity+(maxTagsLen+tagBufferCapacity)),
+			key:         0,
+			shardKey:    0,
+		}
+		return r
+	})
+	keyBufferPool = synced.NewBatchPool[[]byte](synced.PreallocationBatchSize, func() []byte {
+		return make([]byte, 0, preallocatedBufferCapacity)
+	})
+	tagsSlicesPool = synced.NewBatchPool[[][]byte](synced.PreallocationBatchSize, func() [][]byte {
 		batch := make([][]byte, maxTagsLen)
 		for i := range batch {
 			batch[i] = make([]byte, 0, tagBufferCapacity)
@@ -33,63 +45,78 @@ var (
 	})
 )
 
-type FreeResourceFunc func()
-
 type Request struct {
-	mu         *sync.RWMutex
-	project    []byte
-	domain     []byte
-	language   []byte
-	tags       [][]byte
-	freeTagsFn FreeResourceFunc
-
-	// calculated fields (calling while init.)
+	project     []byte
+	domain      []byte
+	language    []byte
+	tags        [][]byte
 	uniqueQuery []byte
-	uniqueKey   *atomic.Uint64
+	key         uint64
+	shardKey    uint64
+	releaseFn   func()
 }
 
 func NewRequest(q *fasthttp.Args) (*Request, error) {
-	tags, freeTagsFn := extractTags(q)
-	return NewManualRequest(q.Peek("project[id]"), q.Peek("domain"), q.Peek("language"), tags, freeTagsFn)
-}
-
-func NewManualRequest(project, domain, language []byte, tags [][]byte, freeTagsFn FreeResourceFunc) (*Request, error) {
-	if project == nil || len(project) == 0 {
-		return nil, errors.New("project is not specified")
+	var (
+		project         = q.Peek("project[id]")
+		domain          = q.Peek("domain")
+		language        = q.Peek("language")
+		tags, releaseFn = extractTags(q)
+	)
+	req, err := requestsPool.Get().clear().setUp(project, domain, language, tags, releaseFn).validate()
+	if err != nil {
+		return nil, err
 	}
-	if domain == nil || len(domain) == 0 {
-		return nil, errors.New("domain is not specified")
-	}
-	if language == nil || len(language) == 0 {
-		return nil, errors.New("language is not specified")
-	}
-
-	req := RequestsPool.Get()
-
-	if req.mu == nil {
-		req.mu = new(sync.RWMutex)
-	}
-	if req.uniqueKey == nil {
-		req.uniqueKey = atomic.NewUint64(0)
-	}
-
-	req.project = project
-	req.domain = domain
-	req.language = language
-	req.tags = tags
-	req.freeTagsFn = freeTagsFn
-
 	return req, nil
 }
 
+func (r *Request) setUp(project, domain, language []byte, tags [][]byte, releaseFn func()) *Request {
+	r.project = project
+	r.domain = domain
+	r.language = language
+	r.tags = tags
+	r.releaseFn = releaseFn
+	r.uniqueQuery = r.uniqueQuery[:0]
+
+	key := r.setUpKey()
+	r.setUpQuery()
+	r.setUpShardKey(key)
+
+	return r
+}
+
+func (r *Request) clear() *Request {
+	r.project = nil
+	r.domain = nil
+	r.language = nil
+	r.tags = nil
+	r.key = 0
+	r.shardKey = 0
+	r.releaseFn = nil
+	return r
+}
+
+func (r *Request) validate() (*Request, error) {
+	if r.project == nil || len(r.project) == 0 {
+		return nil, errors.New("project is not specified")
+	}
+	if r.domain == nil || len(r.domain) == 0 {
+		return nil, errors.New("domain is not specified")
+	}
+	if r.language == nil || len(r.language) == 0 {
+		return nil, errors.New("language is not specified")
+	}
+	return r, nil
+}
+
 // extractTags - returns a slice with []byte("${choice name}").
-func extractTags(args *fasthttp.Args) ([][]byte, FreeResourceFunc) {
+func extractTags(args *fasthttp.Args) (tags [][]byte, releaseFn func()) {
 	var (
 		nullValue   = []byte("null")
 		choiceValue = []byte("choice")
 	)
 
-	tagsSls := TagsSlicesPool.Get()
+	tagsSls := tagsSlicesPool.Get()
 	for _, tagSl := range tagsSls {
 		tagSl = tagSl[:0]
 	}
@@ -102,7 +129,7 @@ func extractTags(args *fasthttp.Args) ([][]byte, FreeResourceFunc) {
 		tagsSls[i] = append(tagsSls[i], value...)
 		i++
 	})
-	return tagsSls, func() { TagsSlicesPool.Put(tagsSls) }
+	return tagsSls, func() { tagsSlicesPool.Put(tagsSls) }
 }
 
 func (r *Request) GetProject() []byte {
@@ -117,19 +144,12 @@ func (r *Request) GetLanguage() []byte {
 func (r *Request) GetTags() [][]byte {
 	return r.tags
 }
-func (r *Request) UniqueKey() uint64 {
-	if key := r.uniqueKey.Load(); key != 0 {
-		return key
-	}
-
-	// calculate capacity
-	bufCap := len(r.project) + len(r.domain) + len(r.language)
-	for _, tag := range r.tags {
-		bufCap += len(tag)
-	}
-
+func (r *Request) setUpKey() uint64 {
 	// build unique buffer of request data
-	buf := make([]byte, 0, bufCap)
+	buf := keyBufferPool.Get()
+	defer keyBufferPool.Put(buf)
+	buf = buf[:0]
+
 	buf = append(buf, r.project...)
 	buf = append(buf, r.domain...)
 	buf = append(buf, r.language...)
@@ -149,25 +169,28 @@ func (r *Request) UniqueKey() uint64 {
 	}
 
 	key := hasher.Sum64()
-	r.uniqueKey.Store(key)
+	r.key = key
 
 	return key
 }
-func (r *Request) ToQuery() []byte {
-	r.mu.RLock()
-	uniqueQuery := r.uniqueQuery
-	r.mu.RUnlock()
+func (r *Request) Key() uint64 {
+	return r.key
+}
+func (r *Request) ShardKey() uint64 {
+	return atomic.LoadUint64(&r.shardKey)
+}
 
-	if len(uniqueQuery) != 0 {
-		return uniqueQuery
+func (r *Request) setUpShardKey(key uint64) {
+	atomic.StoreUint64(&r.shardKey, sharded.MapShardKey(key))
+}
+
+func (r *Request) setUpQuery() {
+	q := r.uniqueQuery
+	if q == nil {
+		panic("query slice must be set and be alive along all request live")
 	}
 
-	bufCap := preallocatedBufferCapacity + len(r.project) + len(r.domain) + len(r.language)
-	for _, tag := range r.tags {
-		bufCap += len(tag)
-	}
-
-	buf := make([]byte, 0, bufCap)
+	buf := q[:0]
 	buf = append(buf, []byte("?project[id]=")...)
 	buf = append(buf, r.project...)
 	buf = append(buf, []byte("&domain=")...)
@@ -190,15 +213,14 @@ func (r *Request) ToQuery() []byte {
 	buf = append(buf, bytes.Repeat([]byte("[choice]"), n)...)
 	buf = append(buf, []byte("=null")...)
 
-	r.mu.Lock()
 	r.uniqueQuery = buf
-	r.mu.Unlock()
-
-	return buf
 }
 
-func (r *Request) Free() {
-	r.freeTagsFn()
-	r.uniqueKey.Store(0)
-	r.uniqueQuery = r.uniqueQuery[:0]
+func (r *Request) ToQuery() []byte {
+	return r.uniqueQuery
+}
+
+func (r *Request) Release() {
+	r.clear().releaseFn()
+	requestsPool.Put(r)
 }

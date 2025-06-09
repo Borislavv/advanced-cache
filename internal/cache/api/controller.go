@@ -83,14 +83,16 @@ func (c *CacheController) Index(r *fasthttp.RequestCtx) {
 		return
 	}
 
-	resp, found := c.cache.Get(req)
+	resp, release, found := c.cache.Get(req)
+	defer release()
 	if !found {
 		resp, err = c.seoRepo.PageData(ctx, req)
 		if err != nil {
 			c.respondThatServiceIsTemporaryUnavailable(err, r)
 			return
 		}
-		c.cache.Set(resp)
+		release = c.cache.Set(resp)
+		defer release()
 	}
 
 	data := resp.GetData()
@@ -109,7 +111,6 @@ func (c *CacheController) Index(r *fasthttp.RequestCtx) {
 
 	if c.cfg.IsDebugOn() {
 		durCh <- time.Since(f)
-		//log.Info().Msgf("Cache Index took %v", time.Since(f))
 	}
 }
 

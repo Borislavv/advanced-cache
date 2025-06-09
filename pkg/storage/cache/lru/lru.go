@@ -54,15 +54,19 @@ func NewLRU(ctx context.Context, cfg *config.Config) *LRU {
 	return lru
 }
 
-func (c *LRU) Get(req *model.Request) (*model.Response, bool) {
-	key := req.UniqueKey()
-	shardKey := c.shardedMap.GetShardKey(key)
-	resp, found := c.shardedMap.Get(key, shardKey)
+func (c *LRU) Get(req *model.Request) (resp *model.Response, release func(), isHit bool) {
+	var (
+		key      = req.Key()
+		shardKey = req.ShardKey()
+	)
+
+	resp, release, found := c.shardedMap.Get(key, shardKey)
 	if found {
 		c.onFound(shardKey, resp, nil)
-		return resp, true
+		return resp, release, true
 	}
-	return nil, false
+
+	return nil, release, false
 }
 
 func (c *LRU) onFound(shardKey uint64, target *model.Response, source *model.Response) {
@@ -77,35 +81,36 @@ func (c *LRU) onFound(shardKey uint64, target *model.Response, source *model.Res
 	}
 }
 
-func (c *LRU) Set(newResp *model.Response) {
-	key := newResp.GetRequest().UniqueKey()
-	shardKey := c.shardedMap.GetShardKey(key)
-	shard := c.shardedMap.Shard(shardKey)
+func (c *LRU) Set(newResp *model.Response) (release func()) {
+	var (
+		key      = newResp.GetRequest().Key()
+		shardKey = newResp.GetRequest().ShardKey()
+		shard    = c.shardedMap.Shard(shardKey)
+	)
 
-	resp, found := shard.Get(key)
+	resp, release, found := shard.Get(key)
 	if found {
 		c.onFound(shardKey, resp, newResp)
-		return
+		return release
 	}
 
 	c.onSet(key, shard, newResp)
+
+	return release
 }
 
 func (c *LRU) onSet(key uint64, shard *sharded.Shard[*model.Response], resp *model.Response) {
-	resp.SetShardKey(shard.ID())
-
 	if c.shouldEvict(resp.Size()) {
 		c.evict()
 	}
 
-	c.balancer.set(resp)
 	shard.Set(key, resp)
+
+	c.balancer.rebalance(c.balancer.set(resp))
 }
 
 func (c *LRU) del(req *model.Request) (freedMem uintptr, isHit bool) {
-	key := req.UniqueKey()
-	shardKey := c.shardedMap.GetShardKey(key)
-	return c.balancer.remove(key, shardKey)
+	return c.balancer.remove(req.Key(), req.ShardKey())
 }
 
 func (c *LRU) spawnEvictors() {

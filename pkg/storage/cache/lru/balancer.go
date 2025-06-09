@@ -35,22 +35,10 @@ func (t *Balancer) register(shard *sharded.Shard[*model.Response]) {
 	t.shards[shard.ID()] = n
 }
 
-func (t *Balancer) set(resp *model.Response) *list.Element[*model.Request] {
-	n := t.shards[resp.GetShardKey()]
-	if n == nil {
-		return nil
-	}
-
-	el := t.push(n, resp)
-	t.rebalance(n)
-
-	return el
-}
-
-func (t *Balancer) push(n *shardNode, resp *model.Response) *list.Element[*model.Request] {
-	el := n.lruList.PushFront(resp.GetRequest())
-	resp.SetListElement(el)
-	return el
+func (t *Balancer) set(resp *model.Response) *shardNode {
+	node := t.shards[resp.GetRequest().ShardKey()]
+	resp.SetListElement(node.lruList.PushFront(resp.GetRequest()))
+	return node
 }
 
 func (t *Balancer) rebalance(n *shardNode) {
@@ -76,12 +64,7 @@ func (t *Balancer) rebalance(n *shardNode) {
 }
 
 func (t *Balancer) move(shardKey uint64, el *list.Element[*model.Request]) {
-	n := t.shards[shardKey]
-	if n == nil {
-		return
-	}
-
-	n.lruList.MoveToFront(el)
+	t.shards[shardKey].lruList.MoveToFront(el)
 }
 
 func (t *Balancer) swap(a, b *list.Element[*shardNode]) {
@@ -89,32 +72,16 @@ func (t *Balancer) swap(a, b *list.Element[*shardNode]) {
 }
 
 func (t *Balancer) remove(key uint64, shardKey uint64) (freedMem uintptr, isHit bool) {
-	resp, found := t.shardedMap.Get(key, shardKey)
-	if !found {
-		return 0, false
-	}
-
-	if !resp.StartReleasing() {
-		return 0, false
-	}
-
-	size := resp.Size()
-	el := resp.GetListElement()
-
-	ok := t.shardedMap.Release(key)
-	if !ok {
+	freed, listElem, isHit := t.shardedMap.Release(key)
+	if !isHit {
 		return 0, false
 	}
 
 	n := t.shards[shardKey]
-	t.del(n, el)
+	n.lruList.Remove(listElem.(*list.Element[*model.Request]))
 	t.rebalance(n)
 
-	return size, true
-}
-
-func (t *Balancer) del(n *shardNode, element *list.Element[*model.Request]) {
-	n.lruList.Remove(element)
+	return freed, true
 }
 
 func (t *Balancer) mostLoadedList(percentage int) []*shardNode {

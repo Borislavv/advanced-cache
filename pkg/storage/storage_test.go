@@ -64,7 +64,8 @@ func BenchmarkReadFromStorage1000TimesPerIter(b *testing.B) {
 		i := 0
 		for pb.Next() {
 			for j := 0; j < 1000; j++ {
-				_, _ = db.Get(responses[(i*j)%length].GetRequest())
+				_, release, _ := db.Get(responses[(i*j)%length].GetRequest())
+				release()
 			}
 			i += 1000
 		}
