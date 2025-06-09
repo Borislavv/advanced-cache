@@ -4,8 +4,10 @@ import (
 	"context"
 	"github.com/Borislavv/traefik-http-cache-plugin/internal/cache/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/internal/cache/server"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/repository"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage"
+	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
 	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
 	"github.com/rs/zerolog/log"
 	"gitlab.xbet.lan/v3group/backend/packages/go/graceful-shutdown/pkg/shutdown"
@@ -29,7 +31,9 @@ func NewApp(ctx context.Context, cfg *config.Config, probe liveness.Prober) (*Ca
 	_ = cancel
 
 	cacheCfg := &cfg.Config
-	store := storage.New(ctx, cacheCfg)
+	shardedMap := sharded.NewMap[*model.Response](cfg.InitStorageLengthPerShard)
+	//wheel := time.NewWheel(ctx, shardedMap)
+	store := storage.New(ctx, cacheCfg, shardedMap)
 	reader := synced.NewPooledResponseReader(synced.PreallocationBatchSize)
 	repo := repository.NewSeo(cacheCfg, reader)
 
