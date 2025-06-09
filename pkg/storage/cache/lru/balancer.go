@@ -9,26 +9,26 @@ import (
 type shardNode struct {
 	lruList     *list.List[*model.Request] // less used starts at the back
 	memListElem *list.Element[*shardNode]
-	shard       *sharded.Shard[uint64, *model.Response]
+	shard       *sharded.Shard[*model.Response]
 }
 
 type Balancer struct {
 	shards     [sharded.ShardCount]*shardNode
 	memList    *list.List[*shardNode] // more loaded starts at the front
-	shardedMap *sharded.Map[uint64, *model.Response]
+	shardedMap *sharded.Map[*model.Response]
 }
 
-func NewBalancer(shardedMap *sharded.Map[uint64, *model.Response]) *Balancer {
+func NewBalancer(shardedMap *sharded.Map[*model.Response]) *Balancer {
 	return &Balancer{
-		memList:    list.New[*shardNode](),
+		memList:    list.New[*shardNode](true),
 		shardedMap: shardedMap,
 	}
 }
 
-func (t *Balancer) register(shard *sharded.Shard[uint64, *model.Response]) {
+func (t *Balancer) register(shard *sharded.Shard[*model.Response]) {
 	n := &shardNode{
 		shard:   shard,
-		lruList: list.New[*model.Request](),
+		lruList: list.New[*model.Request](true),
 	}
 
 	n.memListElem = t.memList.PushBack(n)
@@ -107,7 +107,7 @@ func (t *Balancer) del(n *shardNode, resp *model.Response) {
 }
 
 func (t *Balancer) mostLoadedList(percentage int) []*shardNode {
-	shardsNum := (sharded.ShardCount / 100) * percentage
+	shardsNum := (int(sharded.ShardCount) / 100) * percentage
 	if shardsNum <= 0 {
 		shardsNum = 1
 	}

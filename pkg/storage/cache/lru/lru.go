@@ -25,7 +25,7 @@ type evictionStat struct {
 type LRU struct {
 	ctx               context.Context
 	cfg               *config.Config
-	shardedMap        *sharded.Map[uint64, *model.Response]
+	shardedMap        *sharded.Map[*model.Response]
 	balancer          *Balancer
 	evictionThreshold uintptr
 	evictionTriggerCh chan struct{}
@@ -35,13 +35,13 @@ func NewLRU(ctx context.Context, cfg *config.Config) *LRU {
 	lru := &LRU{
 		ctx:               ctx,
 		cfg:               cfg,
-		shardedMap:        sharded.NewMap[uint64, *model.Response](cfg.InitStorageLengthPerShard),
+		shardedMap:        sharded.NewMap[*model.Response](cfg.InitStorageLengthPerShard),
 		evictionThreshold: uintptr(float64(cfg.MemoryLimit) * cfg.MemoryFillThreshold),
 		evictionTriggerCh: make(chan struct{}, maxEvictors),
 	}
 
 	lru.balancer = NewBalancer(lru.shardedMap)
-	lru.shardedMap.WalkShards(func(shardKey int, shard *sharded.Shard[uint64, *model.Response]) {
+	lru.shardedMap.WalkShards(func(shardKey uint64, shard *sharded.Shard[*model.Response]) {
 		lru.balancer.register(shard)
 	})
 
@@ -91,7 +91,7 @@ func (c *LRU) Set(newResp *model.Response) {
 	c.onSet(key, shard, newResp)
 }
 
-func (c *LRU) onSet(key uint64, shard *sharded.Shard[uint64, *model.Response], resp *model.Response) {
+func (c *LRU) onSet(key uint64, shard *sharded.Shard[*model.Response], resp *model.Response) {
 	resp.SetShardKey(shard.ID())
 
 	if c.shouldEvict(resp.Size()) {

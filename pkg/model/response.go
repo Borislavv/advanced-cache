@@ -52,7 +52,7 @@ type Response struct {
 	listElement *atomic.Pointer[list.Element[*Request]]
 
 	/* immutable */
-	shardKey *atomic.Uint32
+	shardKey *atomic.Uint64
 	/* immutable */
 	cfg *config.Config
 	/* immutable */
@@ -84,7 +84,7 @@ func NewResponse(
 		resp.listElement = &atomic.Pointer[list.Element[*Request]]{}
 	}
 	if resp.shardKey == nil {
-		resp.shardKey = &atomic.Uint32{}
+		resp.shardKey = &atomic.Uint64{}
 	}
 
 	resp.data.Store(data)
@@ -128,12 +128,12 @@ func (r *Response) SetListElement(el *list.Element[*Request]) {
 	r.listElement.Store(el)
 }
 
-func (r *Response) GetShardKey() uint {
-	return uint(r.shardKey.Load())
+func (r *Response) GetShardKey() uint64 {
+	return r.shardKey.Load()
 }
 
-func (r *Response) SetShardKey(shardKey int) {
-	r.shardKey.Store(uint32(shardKey))
+func (r *Response) SetShardKey(shardKey uint64) {
+	r.shardKey.Store(shardKey)
 }
 
 func (r *Response) GetData() *Data {
