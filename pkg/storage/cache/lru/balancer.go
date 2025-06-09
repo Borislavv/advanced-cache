@@ -83,8 +83,12 @@ func (t *Balancer) remove(key uint64, shardKey uint64) (freedMem uintptr, isHit 
 }
 
 // mostLoaded returns the first non-empty shard node found in memList.
-func (t *Balancer) mostLoaded() (*shardNode, bool) {
+func (t *Balancer) mostLoaded(offset int) (*shardNode, bool) {
 	for cur := t.memList.Front(); cur != nil; cur = cur.Next() {
+		if offset > 0 {
+			offset--
+			continue
+		}
 		if cur.Value != nil && cur.Value.shard.Len() > 0 {
 			return cur.Value, true
 		}

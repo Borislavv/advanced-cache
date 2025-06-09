@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	maxEvictors    = 1
+	maxEvictors    = 4
 	evictionStatCh = make(chan evictionStat, maxEvictors*100)
 )
 
@@ -96,19 +96,19 @@ func (c *LRU) del(req *model.Request) (freedMem uintptr, isHit bool) {
 }
 
 func (c *LRU) runEvictors() {
-	for i := 0; i < maxEvictors; i++ {
-		go c.evictor()
+	for id := 0; id < maxEvictors; id++ {
+		go c.evictor(id)
 	}
 }
 
-func (c *LRU) evictor() {
+func (c *LRU) evictor(id int) {
 	for {
 		select {
 		case <-c.ctx.Done():
 			return
 		default:
 			if c.shouldEvict() {
-				items, memory := c.evictUntilWithinLimit()
+				items, memory := c.evictUntilWithinLimit(id)
 				if c.cfg.IsDebugOn() && (items > 0 || memory > 0) {
 					select {
 					case evictionStatCh <- evictionStat{items: items, mem: memory}:
@@ -116,7 +116,7 @@ func (c *LRU) evictor() {
 					}
 				}
 			}
-			time.Sleep(time.Millisecond * 250)
+			time.Sleep(time.Second)
 		}
 	}
 }
@@ -125,9 +125,9 @@ func (c *LRU) shouldEvict() bool {
 	return atomic.LoadInt64(&c.mem) >= c.memoryThreshold
 }
 
-func (c *LRU) evictUntilWithinLimit() (items int, mem uintptr) {
+func (c *LRU) evictUntilWithinLimit(id int) (items int, mem uintptr) {
 	for atomic.LoadInt64(&c.mem) > c.memoryThreshold {
-		shard, found := c.balancer.mostLoaded()
+		shard, found := c.balancer.mostLoaded(id)
 		if !found {
 			break
 		}
