@@ -54,19 +54,19 @@ func NewLRU(ctx context.Context, cfg *config.Config) *LRU {
 	return lru
 }
 
-func (c *LRU) Get(req *model.Request) (resp *model.Response, release func(), isHit bool) {
+func (c *LRU) Get(req *model.Request) (*model.Response, *sharded.Releaser[*model.Response], bool) {
 	var (
 		key      = req.Key()
 		shardKey = req.ShardKey()
 	)
 
-	resp, release, found := c.shardedMap.Get(key, shardKey)
+	resp, releaser, found := c.shardedMap.Get(key, shardKey)
 	if found {
 		c.onFound(shardKey, resp, nil)
-		return resp, release, true
+		return resp, releaser, true
 	}
 
-	return nil, release, false
+	return nil, releaser, false
 }
 
 func (c *LRU) onFound(shardKey uint64, target *model.Response, source *model.Response) {
@@ -81,22 +81,22 @@ func (c *LRU) onFound(shardKey uint64, target *model.Response, source *model.Res
 	}
 }
 
-func (c *LRU) Set(newResp *model.Response) (release func()) {
+func (c *LRU) Set(newResp *model.Response) *sharded.Releaser[*model.Response] {
 	var (
 		key      = newResp.GetRequest().Key()
 		shardKey = newResp.GetRequest().ShardKey()
 		shard    = c.shardedMap.Shard(shardKey)
 	)
 
-	resp, release, found := shard.Get(key)
+	resp, releaser, found := shard.Get(key)
 	if found {
 		c.onFound(shardKey, resp, newResp)
-		return release
+		return releaser
 	}
 
 	c.onSet(key, shard, newResp)
 
-	return release
+	return releaser
 }
 
 func (c *LRU) onSet(key uint64, shard *sharded.Shard[*model.Response], resp *model.Response) {

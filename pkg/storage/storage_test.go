@@ -64,8 +64,8 @@ func BenchmarkReadFromStorage1000TimesPerIter(b *testing.B) {
 		i := 0
 		for pb.Next() {
 			for j := 0; j < 1000; j++ {
-				_, release, _ := db.Get(responses[(i*j)%length].GetRequest())
-				release()
+				_, releaser, _ := db.Get(responses[(i*j)%length].GetRequest())
+				releaser.Release()
 			}
 			i += 1000
 		}
@@ -120,7 +120,8 @@ func BenchmarkWriteIntoStorage1000TimesPerIter(b *testing.B) {
 		i := 0
 		for pb.Next() {
 			for j := 0; j < 1000; j++ {
-				db.Get(responses[(i*j)%length].GetRequest())
+				_, releaser, _ := db.Get(responses[(i*j)%length].GetRequest())
+				releaser.Release()
 			}
 			i += 100
 		}
@@ -149,7 +150,8 @@ func BenchmarkGetAllocs(b *testing.B) {
 	req := resp.GetRequest()
 
 	allocs := testing.AllocsPerRun(100000, func() {
-		db.Get(req)
+		_, rel, _ := db.Get(req)
+		rel.Release()
 	})
 	b.ReportMetric(allocs, "allocs/op")
 }
@@ -168,7 +170,7 @@ func BenchmarkSetAllocs(b *testing.B) {
 	resp := mock.GenerateRandomResponses(cfg, 1)[0]
 
 	allocs := testing.AllocsPerRun(100000, func() {
-		db.Set(resp)
+		db.Set(resp).Release()
 	})
 	b.ReportMetric(allocs, "allocs/op")
 }

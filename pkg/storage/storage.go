@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/cache/lru"
+	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
 
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
@@ -10,8 +11,8 @@ import (
 )
 
 type Storage interface {
-	Get(req *model.Request) (resp *model.Response, release func(), isHit bool)
-	Set(resp *model.Response) (release func())
+	Get(req *model.Request) (resp *model.Response, releaser *sharded.Releaser[*model.Response], isHit bool)
+	Set(resp *model.Response) (releaser *sharded.Releaser[*model.Response])
 }
 
 type AlgoStorage struct {

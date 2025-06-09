@@ -83,16 +83,16 @@ func (c *CacheController) Index(r *fasthttp.RequestCtx) {
 		return
 	}
 
-	resp, release, found := c.cache.Get(req)
-	defer release()
+	resp, rel, found := c.cache.Get(req)
+	defer rel.Release()
 	if !found {
 		resp, err = c.seoRepo.PageData(ctx, req)
 		if err != nil {
 			c.respondThatServiceIsTemporaryUnavailable(err, r)
 			return
 		}
-		release = c.cache.Set(resp)
-		defer release()
+		rel = c.cache.Set(resp)
+		defer rel.Release()
 	}
 
 	data := resp.GetData()

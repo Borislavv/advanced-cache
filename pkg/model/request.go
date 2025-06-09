@@ -7,7 +7,6 @@ import (
 	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
 	"github.com/valyala/fasthttp"
 	"github.com/zeebo/xxh3"
-	"sync/atomic"
 )
 
 const (
@@ -185,11 +184,11 @@ func (r *Request) Key() uint64 {
 	return r.key
 }
 func (r *Request) ShardKey() uint64 {
-	return atomic.LoadUint64(&r.shardKey)
+	return r.shardKey
 }
 
 func (r *Request) setUpShardKey(key uint64) {
-	atomic.StoreUint64(&r.shardKey, sharded.MapShardKey(key))
+	r.shardKey = sharded.MapShardKey(key)
 }
 
 func (r *Request) setUpQuery() {

@@ -46,11 +46,11 @@ func MapShardKey(key uint64) uint64 {
 	return key % ShardCount
 }
 
-func (smap *Map[V]) Set(key uint64, value V) (release func()) {
+func (smap *Map[V]) Set(key uint64, value V) *Releaser[V] {
 	return smap.Shard(key).Set(key, value)
 }
 
-func (smap *Map[V]) Get(key uint64, shardKey uint64) (value V, release func(), found bool) {
+func (smap *Map[V]) Get(key uint64, shardKey uint64) (value V, releaser *Releaser[V], found bool) {
 	return smap.shards[shardKey].Get(key)
 }
 
