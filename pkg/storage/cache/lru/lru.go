@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	maxEvictors    = runtime.GOMAXPROCS(0)
+	maxEvictors    = 1
 	evictionStatCh = make(chan evictionStat, maxEvictors*100)
 )
 
@@ -142,6 +142,7 @@ func (c *LRU) evictUntilWithinLimit() (items int, mem uintptr) {
 		}
 		items++
 		mem += freedMem
+		atomic.AddInt64(&c.mem, -int64(freedMem))
 	}
 	return
 }
