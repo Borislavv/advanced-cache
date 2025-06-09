@@ -76,7 +76,7 @@ func (t *Balancer) remove(key uint64, shardKey uint64) (freedMem uintptr, isHit 
 
 	node := t.shards[shardKey]
 	node.lruList.Remove(listElem.(*list.Element[*model.Request]))
-	atomic.AddInt64(&node.len, 1)
+	atomic.AddInt64(&node.len, -1)
 	t.rebalance(node)
 
 	return freed, true

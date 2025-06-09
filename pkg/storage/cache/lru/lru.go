@@ -34,14 +34,12 @@ type LRU struct {
 }
 
 func NewLRU(ctx context.Context, cfg *config.Config, shardedMap *sharded.Map[*model.Response]) *LRU {
-	const maxMemoryCoefficient uintptr = 98
-
 	lru := &LRU{
 		ctx:             ctx,
 		cfg:             cfg,
 		shardedMap:      shardedMap,
 		memoryThreshold: uintptr(float64(cfg.MemoryLimit) * cfg.MemoryFillThreshold),
-		memoryLimit:     (uintptr(cfg.MemoryLimit) / 100) * maxMemoryCoefficient,
+		memoryLimit:     uintptr(cfg.MemoryLimit)/100 - 1,
 	}
 
 	lru.balancer = NewBalancer(lru.shardedMap)
@@ -79,7 +77,6 @@ func (c *LRU) Set(new *model.Response) *sharded.Releaser[*model.Response] {
 func (c *LRU) touch(existing *model.Response) {
 	existing.IncRefCount()
 	c.balancer.move(existing.GetRequest().ShardKey(), existing.GetListElement())
-	log.Info().Msg("found")
 }
 
 func (c *LRU) update(existing, new *model.Response) {
