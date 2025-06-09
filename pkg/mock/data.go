@@ -29,7 +29,7 @@ func GenerateRandomRequests(num int) []*model.Request {
 				}
 				req, err := model.NewManualRequest(
 					[]byte(strconv.Itoa(projectID)),
-					[]byte("california-sunshine.com"),
+					[]byte("1x001.com"),
 					[]byte(lng),
 					[][]byte{
 						[]byte(`betting`),
@@ -39,7 +39,6 @@ func GenerateRandomRequests(num int) []*model.Request {
 						[]byte(`betting_null_sport_` + strconv.Itoa(i) + `_` + strconv.Itoa(i*i)),
 						[]byte(`betting_null_sport_` + strconv.Itoa(i) + `_` + strconv.Itoa(i*i) + `_` + strconv.Itoa(projectID*i)),
 					},
-					func() {},
 				)
 				if err != nil {
 					panic(err)

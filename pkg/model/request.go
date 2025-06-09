@@ -56,6 +56,14 @@ type Request struct {
 	releaseFn   func()
 }
 
+func NewManualRequest(project []byte, domain []byte, language []byte, tags [][]byte) (*Request, error) {
+	req, err := requestsPool.Get().clear().setUp(project, domain, language, tags, func() {}).validate()
+	if err != nil {
+		return nil, err
+	}
+	return req, nil
+}
+
 func NewRequest(q *fasthttp.Args) (*Request, error) {
 	var (
 		project         = q.Peek("project[id]")
