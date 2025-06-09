@@ -7,7 +7,7 @@ import (
 )
 
 type (
-	Shard[V Sizer] struct {
+	Shard[V Keyer] struct {
 		sync.RWMutex
 		id    uint64
 		items map[uint64]V
@@ -16,7 +16,7 @@ type (
 	}
 )
 
-func NewShard[V Sizer](id uint64, defaultLen int) *Shard[V] {
+func NewShard[V Keyer](id uint64, defaultLen int) *Shard[V] {
 	return &Shard[V]{
 		RWMutex: sync.RWMutex{},
 		id:      id,
@@ -60,4 +60,17 @@ func (shard *Shard[V]) Del(key uint64) (value V, found bool) {
 	}
 	shard.Unlock()
 	return v, f
+}
+
+func (shard *Shard[V]) Release(key uint64) bool {
+	shard.Lock()
+	v, f := shard.items[key]
+	if f {
+		delete(shard.items, key)
+		shard.mem.Add(-v.Size())
+		shard.Len.Add(-1)
+		return v.Release()
+	}
+	shard.Unlock()
+	return f
 }

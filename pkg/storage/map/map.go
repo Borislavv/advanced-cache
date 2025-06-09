@@ -7,17 +7,26 @@ import (
 
 const ShardCount uint64 = 4096
 
+type Releasable interface {
+	Release() bool
+}
+
 type Sizer interface {
 	Size() uintptr
 }
 
+type Keyer interface {
+	Sizer
+	Releasable
+}
+
 type (
-	Map[V Sizer] struct {
+	Map[V Keyer] struct {
 		shards [ShardCount]*Shard[V]
 	}
 )
 
-func NewMap[V Sizer](defaultLen int) *Map[V] {
+func NewMap[V Keyer](defaultLen int) *Map[V] {
 	m := &Map[V]{}
 	for id := uint64(0); id < ShardCount; id++ {
 		m.shards[id] = NewShard[V](id, defaultLen)
@@ -35,6 +44,10 @@ func (smap *Map[V]) Set(key uint64, value V) {
 
 func (smap *Map[V]) Get(key uint64, shardKey uint64) (value V, found bool) {
 	return smap.shards[shardKey].Get(key)
+}
+
+func (smap *Map[V]) Release(key uint64) (ok bool) {
+	return smap.Shard(key).Release(key)
 }
 
 func (smap *Map[V]) Del(key uint64) (value V, found bool) {

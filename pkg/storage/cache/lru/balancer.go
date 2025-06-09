@@ -88,22 +88,33 @@ func (t *Balancer) swap(a, b *list.Element[*shardNode]) {
 	t.memList.SwapValues(a, b)
 }
 
-func (t *Balancer) remove(key uint64, shardKey uint64) (*model.Response, bool) {
-	n := t.shards[shardKey]
-
-	resp, found := t.shardedMap.Del(key)
+func (t *Balancer) remove(key uint64, shardKey uint64) (freedMem uintptr, isHit bool) {
+	resp, found := t.shardedMap.Get(key, shardKey)
 	if !found {
-		return nil, false
+		return 0, false
 	}
 
-	t.del(n, resp)
+	if !resp.StartReleasing() {
+		return 0, false
+	}
+
+	size := resp.Size()
+	el := resp.GetListElement()
+
+	ok := t.shardedMap.Release(key)
+	if !ok {
+		return 0, false
+	}
+
+	n := t.shards[shardKey]
+	t.del(n, el)
 	t.rebalance(n)
 
-	return resp, true
+	return size, true
 }
 
-func (t *Balancer) del(n *shardNode, resp *model.Response) {
-	n.lruList.Remove(resp.GetListElement())
+func (t *Balancer) del(n *shardNode, element *list.Element[*model.Request]) {
+	n.lruList.Remove(element)
 }
 
 func (t *Balancer) mostLoadedList(percentage int) []*shardNode {

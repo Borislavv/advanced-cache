@@ -102,7 +102,7 @@ func (c *LRU) onSet(key uint64, shard *sharded.Shard[*model.Response], resp *mod
 	shard.Set(key, resp)
 }
 
-func (c *LRU) del(req *model.Request) (*model.Response, bool) {
+func (c *LRU) del(req *model.Request) (freedMem uintptr, isHit bool) {
 	key := req.UniqueKey()
 	shardKey := c.shardedMap.GetShardKey(key)
 	return c.balancer.remove(key, shardKey)
@@ -159,21 +159,20 @@ func (c *LRU) evict() {
 
 func (c *LRU) evictMem() (items int, mem uintptr) {
 	const (
-		evictItemsPerIter   = 10
+		evictItemsPerIter   = 75
 		topPercentageShards = 25
-		maxEvictIterations  = 29
+		maxEvictIterations  = 15
 	)
 	for iter := 0; iter < maxEvictIterations; iter++ {
-		nodes := c.balancer.mostLoadedList(topPercentageShards)
-		for _, node := range nodes {
+		for _, node := range c.balancer.mostLoadedList(topPercentageShards) {
 			back := node.lruList.Back()
 			if back == nil {
 				c.balancer.rebalance(node)
 				continue
 			}
-			if resp, found := c.del(back.Value); found {
+			if freedMem, found := c.del(back.Value); found {
 				items++
-				mem += resp.Size()
+				mem += freedMem
 			}
 			if items >= evictItemsPerIter {
 				return items, mem

@@ -52,11 +52,15 @@ type Response struct {
 	listElement *atomic.Pointer[list.Element[*Request]]
 
 	/* immutable */
-	shardKey *atomic.Uint64
+	shardKey uint64
 	/* immutable */
 	cfg *config.Config
 	/* immutable */
 	revalidator ResponseRevalidator
+
+	refCount    int64
+	isReleasing int64
+	isFreed     int64
 }
 
 func NewResponse(
@@ -83,15 +87,29 @@ func NewResponse(
 	if resp.listElement == nil {
 		resp.listElement = &atomic.Pointer[list.Element[*Request]]{}
 	}
-	if resp.shardKey == nil {
-		resp.shardKey = &atomic.Uint64{}
-	}
 
 	resp.data.Store(data)
 	resp.request.Store(req)
 	resp.revalidator = revalidator
 
 	return resp, nil
+}
+
+func (r *Response) StartReleasing() bool {
+	return atomic.CompareAndSwapInt64(&r.isReleasing, 0, 1)
+}
+func (r *Response) StopReleasing() bool {
+	return atomic.CompareAndSwapInt64(&r.isReleasing, 1, 0)
+}
+
+func (r *Response) RefCount() int64 {
+	return atomic.LoadInt64(&r.refCount)
+}
+func (r *Response) IncRefCount() int64 {
+	return atomic.AddInt64(&r.refCount, 1)
+}
+func (r *Response) DecRefCount() int64 {
+	return atomic.AddInt64(&r.refCount, -1)
 }
 
 func (r *Response) ShouldBeRevalidated(source *Response) bool {
@@ -129,11 +147,11 @@ func (r *Response) SetListElement(el *list.Element[*Request]) {
 }
 
 func (r *Response) GetShardKey() uint64 {
-	return r.shardKey.Load()
+	return atomic.LoadUint64(&r.shardKey)
 }
 
 func (r *Response) SetShardKey(shardKey uint64) {
-	r.shardKey.Store(shardKey)
+	atomic.StoreUint64(&r.shardKey, shardKey)
 }
 
 func (r *Response) GetData() *Data {
@@ -185,13 +203,26 @@ func (r *Response) Size() uintptr {
 	return uintptr(size)
 }
 
-func (r *Response) Free() *Response {
-	r.data.Load().freeBody()
-	r.request.Load().Free()
+func (r *Response) Release() bool {
+	r.Free()
+	return true
+}
 
-	r.revalidatedAt.Store(time.Now().UnixNano())
-	r.listElement.Store(nil)
-	r.shardKey.Store(0)
+func (r *Response) Free() {
+	if atomic.CompareAndSwapInt64(&r.isFreed, 0, 1) {
+		r.data.Load().freeBody()
+		r.request.Load().Free()
 
-	return r
+		r.revalidatedAt.Store(time.Now().UnixNano())
+		atomic.StoreUint64(&r.shardKey, 0)
+		r.listElement.Store(nil)
+		r.request.Store(nil)
+		r.data.Store(nil)
+
+		r.StopReleasing()
+		if !atomic.CompareAndSwapInt64(&r.isFreed, 1, 0) {
+			panic("impossible (no one can be here else)")
+		}
+		ResponsePool.Put(r)
+	}
 }
