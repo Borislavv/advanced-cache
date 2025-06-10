@@ -137,10 +137,10 @@ func (w *OfTime[T]) runLogDebugInfo() {
 				)
 				log.
 					Info().
-					Str("target", "wheel").
-					Str("processedNum", processedNum).
-					Str("queueLen", queueLen).
-					Msgf("[wheel][5s] proceesed %s, queue: %s", processedNum, queueLen)
+					//Str("target", "wheel").
+					//Str("processedNum", processedNum).
+					//Str("queueLen", queueLen).
+					Msgf("[wheel][5s] refreshed %s, remaining queue: %s", processedNum, queueLen)
 
 				refreshesNumPer5Sec = 0
 			}

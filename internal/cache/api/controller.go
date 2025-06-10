@@ -193,11 +193,11 @@ func (c *CacheController) logAndReset(s *stat) {
 	var rps = strconv.Itoa(s.count / s.divider)
 	log.
 		Info().
-		Str("target", "server").
-		Str("period", s.label).
-		Str("rps", rps).
-		Str("avgDuration", avg).
-		Msgf("[server][%s] handled %d requests (rps: %s, avgDuration: %s)", s.label, s.count, rps, avg)
+		//Str("target", "server").
+		//Str("period", s.label).
+		//Str("rps", rps).
+		//Str("avgDuration", avg).
+		Msgf("[server][%s] served %d requests (rps: %s, avgDuration: %s)", s.label, s.count, rps, avg)
 	s.count = 0
 	s.total = 0
 }

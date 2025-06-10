@@ -182,26 +182,27 @@ func (c *LRU) runLogDebugInfo() {
 				runtime.ReadMemStats(&m)
 
 				var (
-					mem        = strconv.Itoa(int(atomic.LoadInt64(&c.mem)))
+					mem        = utils.FmtMem(uintptr(atomic.LoadInt64(&c.mem)))
 					length     = strconv.Itoa(int(c.shardedMap.Len()))
 					gc         = strconv.Itoa(int(m.NumGC))
-					limit      = strconv.Itoa(int(c.cfg.MemoryLimit))
+					limit      = utils.FmtMem(uintptr(c.cfg.MemoryLimit))
 					goroutines = strconv.Itoa(runtime.NumGoroutine())
 					alloc      = utils.FmtMem(uintptr(m.Alloc))
+					freedMem   = utils.FmtMem(evictsMemPer5Sec)
 				)
 
 				log.
 					Info().
-					Str("target", "lru").
-					Str("mem", mem).
-					Str("len", length).
-					Str("GC", gc).
-					Str("memLimit", limit).
-					Str("goroutines", goroutines).
+					//Str("target", "lru").
+					//Str("mem", mem).
+					//Str("len", length).
+					//Str("GC", gc).
+					//Str("memLimit", limit).
+					//Str("goroutines", goroutines).
 					Msgf(
-						"[lru][5s] evicted (items: %d, mem: %dB), "+
-							"storage (usage: %sB, len: %s, limit: %sB), sys (alloc: %s, goroutines: %s, GC: %s)",
-						evictsNumPer5Sec, evictsMemPer5Sec, mem, length, limit, alloc, goroutines, gc,
+						"[lru][5s] evicted (items: %d, mem: %s), "+
+							"storage (usage: %s, len: %s, limit: %s), sys (alloc: %s, goroutines: %s, GC: %s)",
+						evictsNumPer5Sec, freedMem, mem, length, limit, alloc, goroutines, gc,
 					)
 
 				evictsNumPer5Sec = 0
