@@ -1,6 +1,8 @@
 package model
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/list"
@@ -13,12 +15,28 @@ import (
 	"unsafe"
 )
 
+const gzipThreshold = 1024
+
 var (
 	dataPool = synced.NewBatchPool[*Data](synced.PreallocationBatchSize, func() *Data {
 		return new(Data)
 	})
 	responsePool = synced.NewBatchPool[*Response](synced.PreallocationBatchSize, func() *Response {
-		return new(Response)
+		return &Response{
+			data:        &atomic.Pointer[Data]{},
+			request:     &atomic.Pointer[Request]{},
+			listElement: &atomic.Pointer[list.Element[*Request]]{},
+		}
+	})
+	gzipBufferPool = synced.NewBatchPool[*bytes.Buffer](synced.PreallocationBatchSize, func() *bytes.Buffer {
+		return new(bytes.Buffer)
+	})
+	gzipWriterPool = synced.NewBatchPool[*gzip.Writer](synced.PreallocationBatchSize, func() *gzip.Writer {
+		w, err := gzip.NewWriterLevel(nil, gzip.BestSpeed)
+		if err != nil {
+			panic("failed to init. gzip writer: " + err.Error())
+		}
+		return w
 	})
 )
 
@@ -26,24 +44,16 @@ type Data struct {
 	statusCode int
 	headers    http.Header
 
-	body        []byte
-	releaseBody synced.FreeResourceFunc
+	body      []byte
+	releaseFn synced.FreeResourceFunc
 }
 
-func NewData(statusCode int, headers http.Header, body []byte, freeBody synced.FreeResourceFunc) *Data {
-	data := dataPool.Get()
-	data.statusCode = statusCode
-	data.headers = headers
-	data.body = body
-	data.releaseBody = freeBody
-	return data
-}
 func NewData(statusCode int, headers http.Header, body []byte, releaseBody synced.FreeResourceFunc) *Data {
-	data := DataPool.Get()
+	data := dataPool.Get()
 	*data = Data{
-		headers:       headers,
-		statusCode:    statusCode,
-		putBodyInPool: releaseBody,
+		headers:    headers,
+		statusCode: statusCode,
+		releaseFn:  releaseBody,
 	}
 
 	if len(body) > gzipThreshold {
@@ -51,24 +61,24 @@ func NewData(statusCode int, headers http.Header, body []byte, releaseBody synce
 		defer gzipWriterPool.Put(gzipper)
 
 		buf := gzipBufferPool.Get()
-		defer gzipBufferPool.Put(buf)
-		buf.Reset()
 		gzipper.Reset(buf)
+		buf.Reset()
 
 		_, err := gzipper.Write(body)
-		if err == nil {
-			_ = gzipper.Close()
-			data.body = append(data.body[:0], buf.Bytes()...)
+		if err == nil && gzipper.Close() == nil {
 			headers.Set("Content-Encoding", "gzip")
+			data.body = buf.Bytes()
 		} else {
-			data.body = append(data.body[:0], body...)
+			data.body = body
 		}
 
-		data.putBodyInPool = func() {
+		data.releaseFn = func() {
 			releaseBody()
+			buf.Reset()
+			gzipBufferPool.Put(buf)
 		}
 	} else {
-		data.body = append(data.body[:0], body...)
+		data.body = body
 	}
 	return data
 }
@@ -80,10 +90,10 @@ func (d *Data) clear() {
 	d.statusCode = 0
 	d.headers = nil
 	d.body = nil
-	d.releaseBody = nil
+	d.releaseFn = nil
 }
 func (d *Data) Release() {
-	d.releaseBody()
+	d.releaseFn()
 	d.clear()
 	dataPool.Put(d)
 }

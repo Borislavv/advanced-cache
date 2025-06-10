@@ -3,12 +3,11 @@ package model
 import (
 	"bytes"
 	"errors"
-	"sync"
-
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
 	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
 	"github.com/valyala/fasthttp"
 	"github.com/zeebo/xxh3"
+	"sync"
 )
 
 const (
@@ -17,9 +16,17 @@ const (
 	maxTagsLen                 = 10
 )
 
+type internPool struct {
+	mu *sync.RWMutex
+	mm map[string][]byte
+}
+
 var (
 	// internPool stores unique byte slices to enforce strict interning
-	internPool sync.Map // map[string][]byte
+	interningPool = &internPool{
+		mu: &sync.RWMutex{},
+		mm: make(map[string][]byte, synced.PreallocationBatchSize*10),
+	}
 
 	hasherPool = synced.NewBatchPool[*xxh3.Hasher](synced.PreallocationBatchSize, func() *xxh3.Hasher {
 		return xxh3.New()
@@ -49,16 +56,22 @@ var (
 // internSlice returns a shared []byte for identical inputs to reduce allocations.
 func internSlice(b []byte) []byte {
 	key := string(b)
-	if v, ok := internPool.Load(key); ok {
-		return v.([]byte)
+
+	interningPool.mu.RLock()
+	if v, ok := interningPool.mm[key]; ok {
+		interningPool.mu.RUnlock()
+		return v
 	}
+	interningPool.mu.RUnlock()
 
 	// plays as a preallocator
 	slBytes := preallocatorBufferPool.Get()
 	slBytes = slBytes[:0]
 	slBytes = append(slBytes, b...)
 
-	internPool.Store(key, slBytes)
+	interningPool.mu.Lock()
+	interningPool.mm[key] = slBytes
+	interningPool.mu.Unlock()
 
 	return slBytes
 }
@@ -115,7 +128,7 @@ func (r *Request) setUp(project, domain, language []byte, tags [][]byte, release
 	r.tags = tags
 	r.releaseFn = releaseFn
 	r.uniqueQuery = r.uniqueQuery[:0]
-	
+
 	r.setUpQuery()
 	r.setUpShardKey(r.setUpKey())
 

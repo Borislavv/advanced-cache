@@ -99,7 +99,7 @@ func (c *CacheController) Index(r *fasthttp.RequestCtx) {
 	r.Response.SetStatusCode(data.StatusCode())
 	for key, vv := range data.Headers() {
 		for _, value := range vv {
-			r.Request.Header.Add(key, value)
+			r.Response.Header.Add(key, value)
 		}
 	}
 
