@@ -15,25 +15,31 @@ type Releasable interface {
 	StoreRefCount(new int64)
 	IsDoomed() bool
 	MarkAsDoomed() bool
-	ListElement() any
+	ShardListElement() any
+}
+
+type Keyer interface {
+	Key() uint64
+	ShardKey() uint64
 }
 
 type Sizer interface {
 	Size() uintptr
 }
 
-type Keyer interface {
+type Value interface {
+	Keyer
 	Sizer
 	Releasable
 }
 
 type (
-	Map[V Keyer] struct {
+	Map[V Value] struct {
 		shards [ShardCount]*Shard[V]
 	}
 )
 
-func NewMap[V Keyer](defaultLen int) *Map[V] {
+func NewMap[V Value](defaultLen int) *Map[V] {
 	m := &Map[V]{}
 	for id := uint64(0); id < ShardCount; id++ {
 		m.shards[id] = NewShard[V](id, defaultLen)
@@ -45,8 +51,8 @@ func MapShardKey(key uint64) uint64 {
 	return key % ShardCount
 }
 
-func (smap *Map[V]) Set(key uint64, value V) *Releaser[V] {
-	return smap.Shard(key).Set(key, value)
+func (smap *Map[V]) Set(value V) *Releaser[V] {
+	return smap.shards[value.ShardKey()].Set(value.Key(), value)
 }
 
 func (smap *Map[V]) Get(key uint64, shardKey uint64) (value V, releaser *Releaser[V], found bool) {
@@ -72,18 +78,6 @@ func (shard *Shard[V]) Walk(fn func(uint64, V), lockWrite bool) {
 
 func (smap *Map[V]) Shard(key uint64) *Shard[V] {
 	return smap.shards[MapShardKey(key)]
-}
-
-func (smap *Map[V]) Walk(fn func(uint64, V), lockWrite bool) {
-	var wg sync.WaitGroup
-	wg.Add(int(ShardCount))
-	defer wg.Wait()
-	for key, shard := range smap.shards {
-		go func(k int, s *Shard[V]) {
-			defer wg.Done()
-			shard.Walk(fn, lockWrite)
-		}(key, shard)
-	}
 }
 
 func (smap *Map[V]) WalkShards(fn func(key uint64, shard *Shard[V])) {

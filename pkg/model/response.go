@@ -7,6 +7,7 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/list"
 	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
+	wheelmodel "github.com/Borislavv/traefik-http-cache-plugin/pkg/wheel/model"
 	"math"
 	"math/rand/v2"
 	"net/http"
@@ -23,9 +24,10 @@ var (
 	})
 	responsePool = synced.NewBatchPool[*Response](synced.PreallocationBatchSize, func() *Response {
 		return &Response{
-			data:        &atomic.Pointer[Data]{},
-			request:     &atomic.Pointer[Request]{},
-			listElement: &atomic.Pointer[list.Element[*Request]]{},
+			data:          &atomic.Pointer[Data]{},
+			request:       &atomic.Pointer[Request]{},
+			lruListElem:   &atomic.Pointer[list.Element[*Request]]{},
+			timeWheelElem: &atomic.Pointer[list.LockFreeDoublyLinkedListElement[wheelmodel.Spoke]]{},
 		}
 	})
 	gzipBufferPool = synced.NewBatchPool[*bytes.Buffer](synced.PreallocationBatchSize, func() *bytes.Buffer {
@@ -102,8 +104,10 @@ func (d *Data) Release() {
 type Response struct {
 	request *atomic.Pointer[Request]
 
-	data        *atomic.Pointer[Data]
-	listElement *atomic.Pointer[list.Element[*Request]]
+	data          *atomic.Pointer[Data]
+	lruListElem   *atomic.Pointer[list.Element[*Request]]
+	timeWheelElem *atomic.Pointer[list.LockFreeDoublyLinkedListElement[wheelmodel.Spoke]]
+
 	revalidator func(ctx context.Context) (data *Data, err error)
 
 	refCount int64
@@ -126,8 +130,8 @@ func (r *Response) init() *Response {
 	if r.data == nil {
 		r.data = &atomic.Pointer[Data]{}
 	}
-	if r.listElement == nil {
-		r.listElement = &atomic.Pointer[list.Element[*Request]]{}
+	if r.lruListElem == nil {
+		r.lruListElem = &atomic.Pointer[list.Element[*Request]]{}
 	}
 	return r
 }
@@ -151,10 +155,20 @@ func (r *Response) clear() *Response {
 	r.maxStaleDuration = 0
 	r.revalidateInterval = 0
 	r.beta = 0
-	r.listElement.Store(nil)
+	r.timeWheelElem.Store(nil)
+	r.lruListElem.Store(nil)
 	r.request.Store(nil)
 	r.data.Store(nil)
 	return r
+}
+func (r *Response) ToQuery() []byte {
+	return r.request.Load().ToQuery()
+}
+func (r *Response) Key() uint64 {
+	return atomic.LoadUint64(&r.request.Load().key)
+}
+func (r *Response) ShardKey() uint64 {
+	return atomic.LoadUint64(&r.request.Load().shardKey)
 }
 func (r *Response) IsDoomed() bool {
 	return atomic.LoadInt64(&r.isDoomed) == 1
@@ -178,11 +192,7 @@ func (r *Response) StoreRefCount(new int64) {
 	atomic.StoreInt64(&r.refCount, new)
 }
 
-func (r *Response) ShouldBeRevalidated(source *Response) bool {
-	if source != nil {
-		return false
-	}
-
+func (r *Response) ShouldRefresh() bool {
 	age := time.Since(time.Unix(0, atomic.LoadInt64(&r.revalidatedAt))).Nanoseconds()
 	if age > r.maxStaleDuration {
 		return rand.Float64() >= math.Exp((float64(-r.beta)/100)*float64(age)/float64(r.revalidateInterval))
@@ -196,44 +206,58 @@ func (r *Response) Revalidate(ctx context.Context) error {
 		return err
 	}
 	r.data.Store(data)
-	atomic.StoreInt64(&r.revalidatedAt, time.Now().UnixNano())
+	r.Touch()
 	return nil
 }
 
-func (r *Response) GetRequest() *Request {
+func (r *Response) Touch() {
+	atomic.StoreInt64(&r.revalidatedAt, time.Now().UnixNano())
+}
+
+func (r *Response) Request() *Request {
 	return r.request.Load()
 }
 
-func (r *Response) ListElement() any {
-	return r.listElement.Load()
+func (r *Response) ShardListElement() any {
+	return r.lruListElem.Load()
 }
 
-func (r *Response) GetListElement() *list.Element[*Request] {
-	return r.listElement.Load()
+func (r *Response) LruListElement() *list.Element[*Request] {
+	return r.lruListElem.Load()
 }
 
-func (r *Response) SetListElement(el *list.Element[*Request]) {
-	r.listElement.Store(el)
+func (r *Response) SetLruListElement(el *list.Element[*Request]) {
+	r.lruListElem.Store(el)
 }
 
-func (r *Response) GetData() *Data {
+func (r *Response) WheelListElement() *list.LockFreeDoublyLinkedListElement[wheelmodel.Spoke] {
+	return r.timeWheelElem.Load()
+}
+
+func (r *Response) StoreWheelListElement(elem *list.LockFreeDoublyLinkedListElement[wheelmodel.Spoke]) {
+	r.timeWheelElem.Store(elem)
+}
+
+func (r *Response) Data() *Data {
 	return r.data.Load()
 }
 
-func (r *Response) SetData(d *Data) {
-	r.data.Store(d)
-}
-
-func (r *Response) GetBody() []byte {
+func (r *Response) Body() []byte {
 	return r.data.Load().Body()
 }
 
-func (r *Response) GetHeaders() http.Header {
+func (r *Response) Headers() http.Header {
 	return r.data.Load().Headers()
 }
 
-func (r *Response) GetRevalidatedAt() time.Time {
+func (r *Response) RevalidatedAt() time.Time {
 	return time.Unix(0, atomic.LoadInt64(&r.revalidatedAt))
+}
+func (r *Response) NativeRevalidatedAt() int64 {
+	return atomic.LoadInt64(&r.revalidatedAt)
+}
+func (r *Response) NativeRevalidateInterval() int64 {
+	return atomic.LoadInt64(&r.revalidateInterval)
 }
 func (r *Response) Size() uintptr {
 	var size = int(unsafe.Sizeof(r))
@@ -251,7 +275,7 @@ func (r *Response) Size() uintptr {
 	}
 
 	// calc dynamic req fields weight
-	req := r.GetRequest()
+	req := r.Request()
 	if req != nil {
 		size += int(unsafe.Sizeof(req))
 		size += len(req.project)

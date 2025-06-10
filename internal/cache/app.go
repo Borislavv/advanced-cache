@@ -9,6 +9,8 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage"
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
 	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/wheel"
+	wheelmodel "github.com/Borislavv/traefik-http-cache-plugin/pkg/wheel/model"
 	"github.com/rs/zerolog/log"
 	"gitlab.xbet.lan/v3group/backend/packages/go/graceful-shutdown/pkg/shutdown"
 	"gitlab.xbet.lan/v3group/backend/packages/go/liveness-prober"
@@ -30,12 +32,11 @@ func NewApp(ctx context.Context, cfg *config.Config, probe liveness.Prober) (*Ca
 	ctx, cancel := context.WithCancel(ctx)
 	_ = cancel
 
-	cacheCfg := &cfg.Config
 	shardedMap := sharded.NewMap[*model.Response](cfg.InitStorageLengthPerShard)
-	//wheel := time.NewWheel(ctx, shardedMap)
-	store := storage.New(ctx, cacheCfg, shardedMap)
+	timeWheel := wheel.New[wheelmodel.Spoke](ctx, cfg)
+	store := storage.New(ctx, &cfg.Config, timeWheel, shardedMap)
 	reader := synced.NewPooledResponseReader(synced.PreallocationBatchSize)
-	repo := repository.NewSeo(cacheCfg, reader)
+	repo := repository.NewSeo(&cfg.Config, reader)
 
 	if srv, err := server.New(ctx, cfg, store, repo, reader); err != nil {
 		return nil, err

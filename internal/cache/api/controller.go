@@ -16,6 +16,7 @@ import (
 	util "gitlab.xbet.lan/v3group/backend/packages/go/httpserver/pkg/httpserver/util"
 	"net/http"
 	"runtime"
+	"strconv"
 	"time"
 )
 
@@ -95,7 +96,7 @@ func (c *CacheController) Index(r *fasthttp.RequestCtx) {
 		defer rel.Release()
 	}
 
-	data := resp.GetData()
+	data := resp.Data()
 	r.Response.SetStatusCode(data.StatusCode())
 	for key, vv := range data.Headers() {
 		for _, value := range vv {
@@ -103,7 +104,7 @@ func (c *CacheController) Index(r *fasthttp.RequestCtx) {
 		}
 	}
 
-	r.Response.Header.Add("Last-Modified", resp.GetRevalidatedAt().Format(http.TimeFormat))
+	r.Response.Header.Add("Last-Modified", resp.RevalidatedAt().Format(http.TimeFormat))
 	if _, err = util.Write(data.Body(), r); err != nil {
 		c.respondThatServiceIsTemporaryUnavailable(err, r)
 		return
@@ -189,10 +190,14 @@ func (c *CacheController) logAndReset(s *stat) {
 	} else {
 		avg = zeroLiteral
 	}
-	log.Info().Msgf(
-		"[stat] RPS: %d, total req: %d (%s), avg duration %s",
-		s.count/s.divider, s.count, s.label, avg,
-	)
+	var rps = strconv.Itoa(s.count / s.divider)
+	log.
+		Info().
+		Str("target", "server").
+		Str("period", s.label).
+		Str("rps", rps).
+		Str("avgDuration", avg).
+		Msgf("[server][%s] handled %d requests (rps: %s, avgDuration: %s)", s.label, s.count, rps, avg)
 	s.count = 0
 	s.total = 0
 }

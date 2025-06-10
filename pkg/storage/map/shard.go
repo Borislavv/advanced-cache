@@ -8,7 +8,7 @@ import (
 )
 
 type (
-	Shard[V Keyer] struct {
+	Shard[V Value] struct {
 		*sync.RWMutex
 		items        map[uint64]V
 		releaserPool *synced.BatchPool[*Releaser[V]]
@@ -16,14 +16,14 @@ type (
 		len          int64
 		mem          int64
 	}
-	Releaser[V Keyer] struct {
+	Releaser[V Value] struct {
 		val   V
 		relFn func(v V) bool
 		pool  *synced.BatchPool[*Releaser[V]]
 	}
 )
 
-func NewReleaser[V Keyer](val V, pool *synced.BatchPool[*Releaser[V]]) *Releaser[V] {
+func NewReleaser[V Value](val V, pool *synced.BatchPool[*Releaser[V]]) *Releaser[V] {
 	rel := pool.Get()
 	*rel = Releaser[V]{
 		val:  val,
@@ -50,7 +50,7 @@ func (r *Releaser[V]) Release() bool {
 	return ok
 }
 
-func NewShard[V Keyer](id uint64, defaultLen int) *Shard[V] {
+func NewShard[V Value](id uint64, defaultLen int) *Shard[V] {
 	return &Shard[V]{
 		RWMutex: &sync.RWMutex{},
 		items:   make(map[uint64]V, defaultLen),
@@ -116,7 +116,7 @@ func (shard *Shard[V]) Release(key uint64) (freed uintptr, listElement any, isHi
 			v.MarkAsDoomed()
 		}
 
-		return v.Size(), v.ListElement(), true
+		return v.Size(), v.ShardListElement(), true
 	}
 	shard.Unlock()
 	return 0, nil, false

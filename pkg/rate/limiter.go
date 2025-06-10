@@ -7,7 +7,8 @@ import (
 )
 
 type Limiter interface {
-	Take() (token struct{})
+	Take(ctx context.Context) (token struct{}, ok bool)
+	Chan() <-chan struct{}
 }
 
 type Limit struct {
@@ -20,8 +21,20 @@ func NewLimiter(ctx context.Context, limit, init int) *Limit {
 	return &Limit{ctx: ctx, q: spawnTokenProvider(ctx, limit, init)}
 }
 
-func (rl *Limit) Take() (token struct{}) {
-	return <-rl.q
+func (rl *Limit) Chan() <-chan struct{} {
+	return rl.q
+}
+
+func (rl *Limit) Take(ctx context.Context) (token struct{}, ok bool) {
+	if ctx == nil {
+		ctx = rl.ctx
+	}
+	select {
+	case <-ctx.Done():
+		return token, false
+	case s := <-rl.q:
+		return s, true
+	}
 }
 
 func spawnTokenProvider(ctx context.Context, limit, init int) chan struct{} {

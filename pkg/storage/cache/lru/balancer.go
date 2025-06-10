@@ -44,9 +44,9 @@ func (t *Balancer) register(shard *sharded.Shard[*model.Response]) {
 }
 
 func (t *Balancer) set(resp *model.Response) *shardNode {
-	node := t.shards[resp.GetRequest().ShardKey()]
+	node := t.shards[resp.Request().ShardKey()]
 	atomic.AddInt64(&node.len, 1)
-	resp.SetListElement(node.lruList.PushFront(resp.GetRequest()))
+	resp.SetLruListElement(node.lruList.PushFront(resp.Request()))
 	return node
 }
 

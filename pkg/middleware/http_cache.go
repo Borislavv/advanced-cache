@@ -90,12 +90,12 @@ package middleware
 //
 //	if resp, found := p.storage.Get(ctx, req); found {
 //		w.WriteHeader(http.StatusOK)
-//		if _, werr := w.Write(resp.GetBody()); werr != nil {
+//		if _, werr := w.Write(resp.Body()); werr != nil {
 //			w.WriteHeader(http.StatusInternalServerError)
 //			log.Err(werr).Msg("error while writing response into http.ResponseWriter")
 //			return
 //		}
-//		for headerName, v := range resp.GetHeaders() {
+//		for headerName, v := range resp.Headers() {
 //			for _, headerValue := range v {
 //				w.Header().Add(headerName, headerValue)
 //			}
