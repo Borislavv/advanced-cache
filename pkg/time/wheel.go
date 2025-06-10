@@ -121,7 +121,7 @@ func (w *Wheel) spawnRemoveLoop() {
 }
 
 func (w *Wheel) remove(spoke *Spoke) {
-	w.spokesList.Remove(spoke.element)
+	w.spokesList.Remove(spoke.element.Load())
 	w.spokesPool.Put(spoke)
 }
 

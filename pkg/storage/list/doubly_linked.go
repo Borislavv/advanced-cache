@@ -40,6 +40,7 @@ type List[T any] struct {
 // New creates a new List instance. If isMustBeListAThreadSafe is true, it uses a mutex for concurrency safety.
 func New[T any](isMustBeListAThreadSafe bool) *List[T] {
 	l := &List[T]{
+		mu:        &sync.Mutex{},
 		isGuarded: isMustBeListAThreadSafe,
 		elemPool: synced.NewBatchPool[*Element[T]](synced.PreallocationBatchSize, func() *Element[T] {
 			return &Element[T]{}
