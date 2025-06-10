@@ -38,6 +38,40 @@ func NewData(statusCode int, headers http.Header, body []byte, freeBody synced.F
 	data.releaseBody = freeBody
 	return data
 }
+func NewData(statusCode int, headers http.Header, body []byte, releaseBody synced.FreeResourceFunc) *Data {
+	data := DataPool.Get()
+	*data = Data{
+		headers:       headers,
+		statusCode:    statusCode,
+		putBodyInPool: releaseBody,
+	}
+
+	if len(body) > gzipThreshold {
+		gzipper := gzipWriterPool.Get()
+		defer gzipWriterPool.Put(gzipper)
+
+		buf := gzipBufferPool.Get()
+		defer gzipBufferPool.Put(buf)
+		buf.Reset()
+		gzipper.Reset(buf)
+
+		_, err := gzipper.Write(body)
+		if err == nil {
+			_ = gzipper.Close()
+			data.body = append(data.body[:0], buf.Bytes()...)
+			headers.Set("Content-Encoding", "gzip")
+		} else {
+			data.body = append(data.body[:0], body...)
+		}
+
+		data.putBodyInPool = func() {
+			releaseBody()
+		}
+	} else {
+		data.body = append(data.body[:0], body...)
+	}
+	return data
+}
 
 func (d *Data) Headers() http.Header { return d.headers }
 func (d *Data) StatusCode() int      { return d.statusCode }
