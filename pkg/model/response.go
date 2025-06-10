@@ -140,7 +140,7 @@ func (r *Response) setUp(cfg *config.Config, data *Data, req *Request, revalidat
 	r.data.Store(data)
 	r.request.Store(req)
 	r.revalidator = revalidator
-	r.revalidatedAt = time.Now().Unix()
+	r.revalidatedAt = time.Now().UnixNano()
 	r.beta = int64(cfg.RevalidateBeta * 100)
 	r.revalidateInterval = cfg.RevalidateInterval.Nanoseconds()
 	r.maxStaleDuration = cfg.RefreshDurationThreshold.Nanoseconds()
@@ -206,12 +206,8 @@ func (r *Response) Revalidate(ctx context.Context) error {
 		return err
 	}
 	r.data.Store(data)
-	r.Touch()
-	return nil
-}
-
-func (r *Response) Touch() {
 	atomic.StoreInt64(&r.revalidatedAt, time.Now().UnixNano())
+	return nil
 }
 
 func (r *Response) Request() *Request {

@@ -127,8 +127,9 @@ func (c *LRU) evictor(id int) {
 				items, memory := c.evictUntilWithinLimit(id)
 				if c.cfg.IsDebugOn() && (items > 0 || memory > 0) {
 					select {
+					case <-c.ctx.Done():
+						return
 					case evictionStatCh <- evictionStat{items: items, mem: memory}:
-					default:
 					}
 				}
 			}

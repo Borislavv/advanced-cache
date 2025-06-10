@@ -6,7 +6,6 @@ import (
 )
 
 type Spoke interface {
-	Touch()
 	Key() uint64
 	ToQuery() []byte
 	ShardKey() uint64

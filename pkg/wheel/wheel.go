@@ -16,10 +16,14 @@ import (
 
 const numOfRefreshesPerSec = 10
 
-var refreshesStatCh = make(chan int, synced.PreallocationBatchSize)
+var (
+	refreshedNumCh = make(chan struct{}, synced.PreallocationBatchSize)
+	erroredNumCh   = make(chan struct{}, synced.PreallocationBatchSize)
+)
 
 type OfTime[T model.Spoke] struct {
 	ctx        context.Context
+	cfg        *config.Config
 	rate       rate.Limiter
 	spokesList *list.LockFreeDoublyLinkedList[model.Spoke]
 	checkCh    <-chan time.Time
@@ -30,6 +34,7 @@ type OfTime[T model.Spoke] struct {
 func New[T model.Spoke](ctx context.Context, cfg *config.Config) *OfTime[T] {
 	w := &OfTime[T]{
 		ctx:        ctx,
+		cfg:        cfg,
 		spokesList: list.NewLockFreeDoublyLinkedList[model.Spoke](),
 		checkCh:    utils.NewTicker(ctx, time.Second),
 		updateCh:   make(chan model.Spoke, sharded.ShardCount),
@@ -65,10 +70,11 @@ func (w *OfTime[T]) update(spoke model.Spoke) {
 			Str("shardKey", strconv.Itoa(int(spoke.ShardKey()))).
 			Str("query", string(spoke.ToQuery())).
 			Msg("response update failed")
+		erroredNumCh <- struct{}{}
 		return
 	}
-
 	w.spokesList.MoveToFront(spoke.WheelListElement())
+	refreshedNumCh <- struct{}{}
 }
 
 func (w *OfTime[T]) spawnEventLoop() {
@@ -123,26 +129,33 @@ func (w *OfTime[T]) spawnEventLoop() {
 func (w *OfTime[T]) runLogDebugInfo() {
 	go func() {
 		refreshesNumPer5Sec := 0
+		erroredNumPer5Sec := 0
 		ticker := utils.NewTicker(w.ctx, 5*time.Second)
 		for {
 			select {
 			case <-w.ctx.Done():
 				return
-			case num := <-refreshesStatCh:
-				refreshesNumPer5Sec += num
+			case <-refreshedNumCh:
+				refreshesNumPer5Sec += 1
+			case <-erroredNumCh:
+				erroredNumPer5Sec += 1
 			case <-ticker:
 				var (
 					processedNum = strconv.Itoa(refreshesNumPer5Sec)
+					erroredNum   = strconv.Itoa(refreshesNumPer5Sec)
 					queueLen     = strconv.Itoa(int(w.spokesList.Len()))
 				)
+
 				log.
 					Info().
 					//Str("target", "wheel").
-					//Str("processedNum", processedNum).
-					//Str("queueLen", queueLen).
-					Msgf("[wheel][5s] refreshed %s, remaining queue: %s", processedNum, queueLen)
+					//Str("processed", processedNum).
+					//Str("errored", erroredNum).
+					//Str("queue", queueLen).
+					Msgf("[wheel][5s] refreshed %s, errored: %s, queue: %s", processedNum, erroredNum, queueLen)
 
 				refreshesNumPer5Sec = 0
+				erroredNumPer5Sec = 0
 			}
 		}
 	}()
