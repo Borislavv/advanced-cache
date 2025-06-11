@@ -13,6 +13,7 @@ import (
 	"gitlab.xbet.lan/v3group/backend/packages/go/httpserver/pkg/httpserver/controller"
 	"gitlab.xbet.lan/v3group/backend/packages/go/httpserver/pkg/httpserver/middleware"
 	"gitlab.xbet.lan/v3group/backend/packages/go/metrics"
+	metricscontroller "gitlab.xbet.lan/v3group/backend/packages/go/metrics/controller"
 	prometheusrequestmiddleware "gitlab.xbet.lan/v3group/backend/packages/go/metrics/middleware"
 	"sync"
 	"sync/atomic"
@@ -144,6 +145,7 @@ func (s *HttpServer) initServer(cache storage.Storage, seoRepo repository.Seo, r
 func (s *HttpServer) controllers(cache storage.Storage, seoRepo repository.Seo, reader synced.PooledReader) []controller.HttpController {
 	return []controller.HttpController{
 		api.NewCacheController(s.ctx, s.cfg, cache, seoRepo, reader),
+		metricscontroller.NewPrometheusMetrics(s.ctx),
 	}
 }
 
