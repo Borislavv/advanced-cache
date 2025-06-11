@@ -12,15 +12,19 @@ import (
 
 const requestTimeout = time.Second * 10
 
+// Seo defines the interface for a repository that provides SEO page data.
 type Seo interface {
-	PageData(ctx context.Context, req *model.Request) (resp *model.Response, err error)
+	PageData(ctx context.Context, req *model.Request) (*model.Response, error)
 }
 
+// SeoRepository implements the Seo interface.
+// It fetches and constructs SEO page data responses from an external backend.
 type SeoRepository struct {
-	cfg    *config.Config
-	reader synced.PooledReader
+	cfg    *config.Config      // Global configuration (SEO backend URL, etc)
+	reader synced.PooledReader // Efficient reader for HTTP responses
 }
 
+// NewSeo creates a new instance of SeoRepository.
 func NewSeo(cfg *config.Config, reader synced.PooledReader) *SeoRepository {
 	return &SeoRepository{
 		cfg:    cfg,
@@ -28,17 +32,22 @@ func NewSeo(cfg *config.Config, reader synced.PooledReader) *SeoRepository {
 	}
 }
 
-func (s *SeoRepository) PageData(ctx context.Context, req *model.Request) (resp *model.Response, err error) {
+// PageData fetches page data for the given request and constructs a cacheable response.
+// It also attaches a revalidator closure for future background refreshes.
+func (s *SeoRepository) PageData(ctx context.Context, req *model.Request) (*model.Response, error) {
+	// Fetch data from backend.
 	data, err := s.requestPagedata(ctx, req)
 	if err != nil {
 		return nil, errors.New("failed to request pagedata: " + err.Error())
 	}
 
-	revalidator := func(ctx context.Context) (data *model.Data, err error) {
+	// Prepare a closure to allow future revalidation using the same logic/endpoint.
+	revalidator := func(ctx context.Context) (*model.Data, error) {
 		return s.requestPagedata(ctx, req)
 	}
 
-	resp, err = model.NewResponse(data, req, s.cfg, revalidator)
+	// Build a new response object, which contains the cache payload, request, config and revalidator.
+	resp, err := model.NewResponse(data, req, s.cfg, revalidator)
 	if err != nil {
 		return nil, errors.New("failed to create response: " + err.Error())
 	}
@@ -46,17 +55,23 @@ func (s *SeoRepository) PageData(ctx context.Context, req *model.Request) (resp 
 	return resp, nil
 }
 
-func (s *SeoRepository) requestPagedata(ctx context.Context, req *model.Request) (data *model.Data, err error) {
+// requestPagedata actually performs the HTTP request to the SEO backend and parses the response.
+// Returns a Data object suitable for caching.
+func (s *SeoRepository) requestPagedata(ctx context.Context, req *model.Request) (*model.Data, error) {
+	// Apply a hard timeout for the HTTP request.
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 
 	url := s.cfg.SeoUrl
 	query := req.ToQuery()
+
+	// Efficiently concatenate base URL and query.
 	queryBuf := make([]byte, 0, len(url)+len(query))
 	for _, rn := range url {
 		queryBuf = append(queryBuf, byte(rn))
 	}
 	queryBuf = append(queryBuf, query...)
+
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, string(queryBuf), nil)
 	if err != nil {
 		return nil, err
@@ -68,6 +83,7 @@ func (s *SeoRepository) requestPagedata(ctx context.Context, req *model.Request)
 	}
 	defer func() { _ = response.Body.Close() }()
 
+	// Read response body using a pooled reader to reduce allocations.
 	body, freeFn, err := s.reader.Read(response)
 	if err != nil {
 		return nil, err
