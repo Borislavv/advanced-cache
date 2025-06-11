@@ -7,8 +7,6 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/cache"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/cache/lru"
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/wheel"
-	wheelmodel "github.com/Borislavv/traefik-http-cache-plugin/pkg/wheel/model"
 )
 
 type Storage interface {
@@ -20,11 +18,11 @@ type AlgoStorage struct {
 	Storage
 }
 
-func New(ctx context.Context, cfg *config.Config, timeWheel *wheel.OfTime[wheelmodel.Spoke], shardedMap *sharded.Map[*model.Response]) *AlgoStorage {
+func New(ctx context.Context, cfg *config.Config, shardedMap *sharded.Map[*model.Response]) *AlgoStorage {
 	var s Storage
 	switch cache.Algorithm(cfg.EvictionAlgo) {
 	case cache.LRU:
-		s = lru.NewLRU(ctx, cfg, timeWheel, shardedMap)
+		s = lru.NewLRU(ctx, cfg, shardedMap)
 	default:
 		panic("algorithm " + cfg.EvictionAlgo + " does not implemented yet")
 	}

@@ -7,7 +7,10 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
 	"net/http"
+	"time"
 )
+
+const requestTimeout = time.Second * 10
 
 type Seo interface {
 	PageData(ctx context.Context, req *model.Request) (resp *model.Response, err error)
@@ -44,8 +47,10 @@ func (s *SeoRepository) PageData(ctx context.Context, req *model.Request) (resp 
 }
 
 func (s *SeoRepository) requestPagedata(ctx context.Context, req *model.Request) (data *model.Data, err error) {
-	url := s.cfg.SeoUrl
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
 
+	url := s.cfg.SeoUrl
 	query := req.ToQuery()
 	queryBuf := make([]byte, 0, len(url)+len(query))
 	for _, rn := range url {

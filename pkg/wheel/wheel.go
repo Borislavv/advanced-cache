@@ -25,20 +25,20 @@ type OfTime[T model.Spoke] struct {
 	ctx        context.Context
 	cfg        *config.Config
 	rate       rate.Limiter
-	spokesList *list.LockFreeDoublyLinkedList[model.Spoke]
+	spokesList *list.List[model.Spoke]
 	checkCh    <-chan time.Time
 	updateCh   chan model.Spoke
-	removeCh   chan *list.LockFreeDoublyLinkedListElement[model.Spoke]
+	removeCh   chan *list.Element[model.Spoke]
 }
 
 func New[T model.Spoke](ctx context.Context, cfg *config.Config) *OfTime[T] {
 	w := &OfTime[T]{
 		ctx:        ctx,
 		cfg:        cfg,
-		spokesList: list.NewLockFreeDoublyLinkedList[model.Spoke](),
+		spokesList: list.New[model.Spoke](true),
 		checkCh:    utils.NewTicker(ctx, time.Second),
 		updateCh:   make(chan model.Spoke, sharded.ShardCount),
-		removeCh:   make(chan *list.LockFreeDoublyLinkedListElement[model.Spoke], sharded.ShardCount),
+		removeCh:   make(chan *list.Element[model.Spoke], sharded.ShardCount),
 		rate:       rate.NewLimiter(ctx, numOfRefreshesPerSec, numOfRefreshesPerSec),
 	}
 

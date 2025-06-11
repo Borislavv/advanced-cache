@@ -5,12 +5,13 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/list"
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
+	"math/rand/v2"
 	"sync/atomic"
 	"unsafe"
 )
 
 type shardNode struct {
-	lruList     *list.List[*model.Request] // less used starts at the back
+	lruList     *list.List[*model.Response] // less used starts at the back
 	memListElem *list.Element[*shardNode]
 	shard       *sharded.Shard[*model.Response]
 	len         int64
@@ -33,58 +34,62 @@ func NewBalancer(shardedMap *sharded.Map[*model.Response]) *Balancer {
 	}
 }
 
-func (t *Balancer) register(shard *sharded.Shard[*model.Response]) {
-	n := &shardNode{
-		shard:   shard,
-		lruList: list.New[*model.Request](true),
-	}
-
-	n.memListElem = t.memList.PushBack(n)
-	t.shards[shard.ID()] = n
+func (b *Balancer) randShardNode() *shardNode {
+	return b.shards[rand.Uint64N(sharded.ShardCount)]
 }
 
-func (t *Balancer) set(resp *model.Response) *shardNode {
-	node := t.shards[resp.Request().ShardKey()]
+func (b *Balancer) register(shard *sharded.Shard[*model.Response]) {
+	n := &shardNode{
+		shard:   shard,
+		lruList: list.New[*model.Response](true),
+	}
+
+	n.memListElem = b.memList.PushBack(n)
+	b.shards[shard.ID()] = n
+}
+
+func (b *Balancer) set(resp *model.Response) *shardNode {
+	node := b.shards[resp.Request().ShardKey()]
 	atomic.AddInt64(&node.len, 1)
-	resp.SetLruListElement(node.lruList.PushFront(resp.Request()))
+	resp.SetLruListElement(node.lruList.PushFront(resp))
 	return node
 }
 
 // moves shards between neighbors (biggest in the front)
-func (t *Balancer) rebalance(n *shardNode) {
+func (b *Balancer) rebalance(n *shardNode) {
 	curr := n.memListElem
 	if curr == nil {
 		return
 	}
 	next := curr.Next()
 	for next != nil && curr.Value.shard.Size() < next.Value.shard.Size() {
-		t.memList.SwapValues(curr, next)
+		b.memList.SwapValues(curr, next)
 		curr = next
 		next = curr.Next()
 	}
 }
 
-func (t *Balancer) move(shardKey uint64, el *list.Element[*model.Request]) {
-	t.shards[shardKey].lruList.MoveToFront(el)
+func (b *Balancer) move(shardKey uint64, el *list.Element[*model.Response]) {
+	b.shards[shardKey].lruList.MoveToFront(el)
 }
 
-func (t *Balancer) remove(key uint64, shardKey uint64) (freedMem uintptr, isHit bool) {
-	freed, listElem, isHit := t.shardedMap.Release(key)
+func (b *Balancer) remove(key uint64, shardKey uint64) (freedMem uintptr, isHit bool) {
+	freed, listElem, isHit := b.shardedMap.Release(key)
 	if !isHit {
 		return 0, false
 	}
 
-	node := t.shards[shardKey]
-	node.lruList.Remove(listElem.(*list.Element[*model.Request]))
+	node := b.shards[shardKey]
+	node.lruList.Remove(listElem.(*list.Element[*model.Response]))
 	atomic.AddInt64(&node.len, -1)
-	t.rebalance(node)
+	b.rebalance(node)
 
 	return freed, true
 }
 
 // mostLoaded returns the first non-empty shard node found in memList.
-func (t *Balancer) mostLoaded(offset int) (*shardNode, bool) {
-	for cur := t.memList.Front(); cur != nil; cur = cur.Next() {
+func (b *Balancer) mostLoaded(offset int) (*shardNode, bool) {
+	for cur := b.memList.Front(); cur != nil; cur = cur.Next() {
 		if offset > 0 {
 			offset--
 			continue
@@ -96,9 +101,9 @@ func (t *Balancer) mostLoaded(offset int) (*shardNode, bool) {
 	return nil, false
 }
 
-func (t *Balancer) memory() uintptr {
-	mem := unsafe.Sizeof(t) + uintptr(sharded.ShardCount*consts.PtrBytesWeight)
-	for _, shard := range t.shards {
+func (b *Balancer) memory() uintptr {
+	mem := unsafe.Sizeof(b) + uintptr(sharded.ShardCount*consts.PtrBytesWeight)
+	for _, shard := range b.shards {
 		mem += shard.memory()
 	}
 	return mem

@@ -7,8 +7,6 @@ import (
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
 	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/wheel"
-	wheelmodel "github.com/Borislavv/traefik-http-cache-plugin/pkg/wheel/model"
 	"github.com/rs/zerolog/log"
 	"runtime"
 	"strconv"
@@ -30,18 +28,17 @@ type LRU struct {
 	ctx             context.Context
 	cfg             *config.Config
 	shardedMap      *sharded.Map[*model.Response]
-	timeWheel       *wheel.OfTime[wheelmodel.Spoke]
+	refresher       *Refresher
 	balancer        *Balancer
 	mem             int64
 	memoryLimit     int64
 	memoryThreshold int64
 }
 
-func NewLRU(ctx context.Context, cfg *config.Config, timeWheel *wheel.OfTime[wheelmodel.Spoke], shardedMap *sharded.Map[*model.Response]) *LRU {
+func NewLRU(ctx context.Context, cfg *config.Config, shardedMap *sharded.Map[*model.Response]) *LRU {
 	lru := &LRU{
 		ctx:             ctx,
 		cfg:             cfg,
-		timeWheel:       timeWheel,
 		shardedMap:      shardedMap,
 		memoryThreshold: int64(float64(cfg.MemoryLimit) * cfg.MemoryFillThreshold),
 		memoryLimit:     int64(cfg.MemoryLimit)/100 - 1,
@@ -52,9 +49,12 @@ func NewLRU(ctx context.Context, cfg *config.Config, timeWheel *wheel.OfTime[whe
 		lru.balancer.register(shard)
 	})
 
+	lru.refresher = NewRefresher(ctx, cfg, lru.balancer)
+	lru.refresher.RunRefresher()
+
 	lru.runEvictors()
 	if cfg.IsDebugOn() {
-		lru.runLogDebugInfo()
+		lru.runLogger()
 	}
 
 	return lru
@@ -69,23 +69,13 @@ func (c *LRU) Get(req *model.Request) (*model.Response, *sharded.Releaser[*model
 	return nil, nil, false
 }
 
-func (c *LRU) GetBy(key uint64, shard uint64) (resp *model.Response, releaser *sharded.Releaser[*model.Response], isHit bool) {
-	resp, releaser, found := c.shardedMap.Get(key, shard)
-	if found {
-		c.touch(resp)
-		return resp, releaser, true
-	}
-	return nil, nil, false
-}
-
 func (c *LRU) Set(new *model.Response) *sharded.Releaser[*model.Response] {
 	existing, releaser, found := c.shardedMap.Get(new.Request().Key(), new.Request().ShardKey())
 	if found {
 		c.update(existing, new)
 		return releaser
 	}
-	c.set(new)
-	return nil
+	return c.set(new)
 }
 
 func (c *LRU) touch(existing *model.Response) {
@@ -96,19 +86,17 @@ func (c *LRU) touch(existing *model.Response) {
 func (c *LRU) update(existing, new *model.Response) {
 	atomic.AddInt64(&c.mem, int64(existing.Size()-new.Size()))
 	c.touch(existing)
-	c.timeWheel.Touch(existing)
 	c.balancer.move(new.Request().ShardKey(), existing.LruListElement())
 }
 
-func (c *LRU) set(new *model.Response) {
+func (c *LRU) set(new *model.Response) *sharded.Releaser[*model.Response] {
 	atomic.AddInt64(&c.mem, int64(new.Size()))
 	c.balancer.set(new)
-	c.timeWheel.Add(new)
-	c.shardedMap.Set(new)
+	return c.shardedMap.Set(new)
 }
 
-func (c *LRU) del(req *model.Request) (freedMem uintptr, isHit bool) {
-	return c.balancer.remove(req.Key(), req.ShardKey())
+func (c *LRU) del(resp *model.Response) (freedMem uintptr, isHit bool) {
+	return c.balancer.remove(resp.Key(), resp.ShardKey())
 }
 
 func (c *LRU) runEvictors() {
@@ -164,7 +152,7 @@ func (c *LRU) evictUntilWithinLimit(id int) (items int, mem uintptr) {
 	return
 }
 
-func (c *LRU) runLogDebugInfo() {
+func (c *LRU) runLogger() {
 	go func() {
 		ticker := utils.NewTicker(c.ctx, 5*time.Second)
 		var (

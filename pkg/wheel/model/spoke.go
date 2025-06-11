@@ -13,6 +13,6 @@ type Spoke interface {
 	NativeRevalidatedAt() int64
 	NativeRevalidateInterval() int64
 	Revalidate(ctx context.Context) error
-	WheelListElement() *list.LockFreeDoublyLinkedListElement[Spoke]
-	StoreWheelListElement(el *list.LockFreeDoublyLinkedListElement[Spoke])
+	WheelListElement() *list.Element[Spoke]
+	StoreWheelListElement(el *list.Element[Spoke])
 }

@@ -26,8 +26,8 @@ var (
 		return &Response{
 			data:          &atomic.Pointer[Data]{},
 			request:       &atomic.Pointer[Request]{},
-			lruListElem:   &atomic.Pointer[list.Element[*Request]]{},
-			timeWheelElem: &atomic.Pointer[list.LockFreeDoublyLinkedListElement[wheelmodel.Spoke]]{},
+			lruListElem:   &atomic.Pointer[list.Element[*Response]]{},
+			timeWheelElem: &atomic.Pointer[list.Element[wheelmodel.Spoke]]{},
 		}
 	})
 	gzipBufferPool = synced.NewBatchPool[*bytes.Buffer](synced.PreallocationBatchSize, func() *bytes.Buffer {
@@ -105,8 +105,8 @@ type Response struct {
 	request *atomic.Pointer[Request]
 
 	data          *atomic.Pointer[Data]
-	lruListElem   *atomic.Pointer[list.Element[*Request]]
-	timeWheelElem *atomic.Pointer[list.LockFreeDoublyLinkedListElement[wheelmodel.Spoke]]
+	lruListElem   *atomic.Pointer[list.Element[*Response]]
+	timeWheelElem *atomic.Pointer[list.Element[wheelmodel.Spoke]]
 
 	revalidator func(ctx context.Context) (data *Data, err error)
 
@@ -131,7 +131,7 @@ func (r *Response) init() *Response {
 		r.data = &atomic.Pointer[Data]{}
 	}
 	if r.lruListElem == nil {
-		r.lruListElem = &atomic.Pointer[list.Element[*Request]]{}
+		r.lruListElem = &atomic.Pointer[list.Element[*Response]]{}
 	}
 	return r
 }
@@ -218,19 +218,19 @@ func (r *Response) ShardListElement() any {
 	return r.lruListElem.Load()
 }
 
-func (r *Response) LruListElement() *list.Element[*Request] {
+func (r *Response) LruListElement() *list.Element[*Response] {
 	return r.lruListElem.Load()
 }
 
-func (r *Response) SetLruListElement(el *list.Element[*Request]) {
+func (r *Response) SetLruListElement(el *list.Element[*Response]) {
 	r.lruListElem.Store(el)
 }
 
-func (r *Response) WheelListElement() *list.LockFreeDoublyLinkedListElement[wheelmodel.Spoke] {
+func (r *Response) WheelListElement() *list.Element[wheelmodel.Spoke] {
 	return r.timeWheelElem.Load()
 }
 
-func (r *Response) StoreWheelListElement(elem *list.LockFreeDoublyLinkedListElement[wheelmodel.Spoke]) {
+func (r *Response) StoreWheelListElement(elem *list.Element[wheelmodel.Spoke]) {
 	r.timeWheelElem.Store(elem)
 }
 

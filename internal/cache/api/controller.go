@@ -64,7 +64,7 @@ func NewCacheController(
 		reader:  reader,
 	}
 	if c.cfg.IsDebugOn() {
-		c.runLogDebugInfo(ctx)
+		c.runLogger(ctx)
 	}
 	return c
 }
@@ -150,7 +150,7 @@ type stat struct {
 	total    time.Duration
 }
 
-func (c *CacheController) runLogDebugInfo(ctx context.Context) {
+func (c *CacheController) runLogger(ctx context.Context) {
 	durCh = make(chan time.Duration, runtime.GOMAXPROCS(0))
 
 	go func() {
