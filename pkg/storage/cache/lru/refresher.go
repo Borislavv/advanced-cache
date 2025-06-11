@@ -14,16 +14,18 @@ import (
 )
 
 const (
-	rateLimit      = 512
-	refreshSamples = 32 // number of items limit for refresh per shard
+	rateLimit      = 512 // Global limiter: maximum concurrent refreshes across all shards
+	refreshSamples = 32  // Number of items to sample per shard per refresh tick
 )
 
 var (
-	refreshedNumCh = make(chan struct{}, synced.PreallocationBatchSize)
-	erroredNumCh   = make(chan struct{}, synced.PreallocationBatchSize)
+	refreshSuccessNumCh = make(chan struct{}, synced.PreallocationBatchSize) // Successful refreshes counter channel
+	refreshErroredNumCh = make(chan struct{}, synced.PreallocationBatchSize) // Failed refreshes counter channel
 )
 
-// Refresher - refreshes responses by sampling shards and the end of LRU list.
+// Refresher is responsible for background refreshing of cache entries.
+// It periodically samples random shards and randomly selects "cold" entries
+// (from the end of each shard's LRU list) to refresh if necessary.
 type Refresher struct {
 	ctx             context.Context
 	cfg             *config.Config
@@ -33,6 +35,7 @@ type Refresher struct {
 	rate            rate.Limiter
 }
 
+// NewRefresher constructs a Refresher.
 func NewRefresher(ctx context.Context, cfg *config.Config, balancer *Balancer) *Refresher {
 	return &Refresher{
 		ctx:             ctx,
@@ -44,6 +47,9 @@ func NewRefresher(ctx context.Context, cfg *config.Config, balancer *Balancer) *
 	}
 }
 
+// RunRefresher starts the refresher background loop.
+// It runs a logger (if debugging is enabled), spawns a provider for sampling shards,
+// and continuously processes shard samples for candidate responses to refresh.
 func (r *Refresher) RunRefresher() {
 	go func() {
 		if r.cfg.IsDebugOn() {
@@ -56,6 +62,8 @@ func (r *Refresher) RunRefresher() {
 	}()
 }
 
+// spawnShardsSamplesProvider continuously pushes random shard nodes into shardsSamplesCh for processing.
+// The channel is closed on shutdown.
 func (r *Refresher) spawnShardsSamplesProvider() {
 	go func() {
 		defer close(r.shardsSamplesCh)
@@ -69,6 +77,8 @@ func (r *Refresher) spawnShardsSamplesProvider() {
 	}()
 }
 
+// update attempts to refresh the given response via Revalidate.
+// If successful, increments the refresh metric (in debug mode); otherwise increments the error metric.
 func (r *Refresher) update(resp *model.Response) {
 	if err := resp.Revalidate(r.ctx); err != nil {
 		log.
@@ -81,7 +91,7 @@ func (r *Refresher) update(resp *model.Response) {
 		if r.cfg.IsDebugOn() {
 			select {
 			case <-r.ctx.Done():
-			case erroredNumCh <- struct{}{}:
+			case refreshErroredNumCh <- struct{}{}:
 			}
 		}
 		return
@@ -90,12 +100,13 @@ func (r *Refresher) update(resp *model.Response) {
 	if r.cfg.IsDebugOn() {
 		select {
 		case <-r.ctx.Done():
-		case refreshedNumCh <- struct{}{}:
+		case refreshSuccessNumCh <- struct{}{}:
 		}
 	}
 }
 
-// provideRespRefreshSignal - provides N random samples from the back of LRU list.
+// provideRespRefreshSignal selects up to refreshSamples entries from the end of the given shard's LRU list.
+// For each candidate, if ShouldRefresh() returns true and rate limiting allows, triggers an asynchronous refresh.
 func (r *Refresher) provideRespRefreshSignal(node *shardNode) {
 	lru := node.lruList
 
@@ -103,11 +114,12 @@ func (r *Refresher) provideRespRefreshSignal(node *shardNode) {
 	if length == 0 {
 		return
 	}
+	// Prevent excessive sampling if the LRU is very short.
 	if length-refreshSamples > refreshSamples {
 		length -= refreshSamples
 	}
 
-	// cold sampling for the end of the list
+	// Sample from the cold (tail) side of the LRU.
 	for i := 0; i < refreshSamples; i++ {
 		elem := lru.Back()
 		offset := rand.Intn(length)
@@ -130,6 +142,8 @@ func (r *Refresher) provideRespRefreshSignal(node *shardNode) {
 	}
 }
 
+// runLogger periodically logs the number of successful and failed refresh attempts.
+// This runs only if debugging is enabled in the config.
 func (r *Refresher) runLogger() {
 	go func() {
 		refreshesNumPer5Sec := 0
@@ -139,22 +153,22 @@ func (r *Refresher) runLogger() {
 			select {
 			case <-r.ctx.Done():
 				return
-			case <-refreshedNumCh:
-				refreshesNumPer5Sec += 1
-			case <-erroredNumCh:
-				erroredNumPer5Sec += 1
+			case <-refreshSuccessNumCh:
+				refreshesNumPer5Sec++
+			case <-refreshErroredNumCh:
+				erroredNumPer5Sec++
 			case <-ticker:
 				var (
+					errorsNum  = strconv.Itoa(erroredNumPer5Sec)
 					successNum = strconv.Itoa(refreshesNumPer5Sec)
-					erroredNum = strconv.Itoa(erroredNumPer5Sec)
 				)
 
 				log.
 					Info().
-					//Str("target", "wheel").
+					//Str("target", "refresher").
 					//Str("processed", successNum).
-					//Str("errored", erroredNum).
-					Msgf("[refresher][5s] success %s, errors: %s", successNum, erroredNum)
+					//Str("errored", errorsNum).
+					Msgf("[refresher][5s] success %s, errors: %s", successNum, errorsNum)
 
 				refreshesNumPer5Sec = 0
 				erroredNumPer5Sec = 0
