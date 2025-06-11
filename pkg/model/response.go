@@ -193,10 +193,15 @@ func (r *Response) StoreRefCount(new int64) {
 }
 
 func (r *Response) ShouldRefresh() bool {
+	if atomic.LoadInt64(&r.isDoomed) == 1 {
+		return false
+	}
+
 	age := time.Since(time.Unix(0, atomic.LoadInt64(&r.revalidatedAt))).Nanoseconds()
 	if age > r.maxStaleDuration {
 		return rand.Float64() >= math.Exp((float64(-r.beta)/100)*float64(age)/float64(r.revalidateInterval))
 	}
+
 	return false
 }
 
