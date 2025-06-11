@@ -11,36 +11,38 @@ import (
 )
 
 const (
-	preallocatedBufferCapacity = 256 // for pre-allocated buffer for concat string literals and url
-	tagBufferCapacity          = 128
-	maxTagsLen                 = 10
+	preallocatedBufferCapacity = 256 // For pre-allocated buffer for query strings and URL
+	tagBufferCapacity          = 128 // For each tag's []byte slice
+	maxTagsLen                 = 10  // Maximum number of tags per request
 )
 
+// internPool maintains strict string interning for high efficiency in memory usage.
+// All unique byte slices (e.g. project/domain/tag names) are pooled here for deduplication.
 type internPool struct {
 	mu *sync.RWMutex
 	mm map[string][]byte
 }
 
 var (
-	// internPool stores unique byte slices to enforce strict interning
+	// interningPool stores unique byte slices to enforce strict interning and avoid duplication.
 	interningPool = &internPool{
 		mu: &sync.RWMutex{},
 		mm: make(map[string][]byte, synced.PreallocationBatchSize*10),
 	}
 
+	// Pools for reusable objects and buffers.
 	hasherPool = synced.NewBatchPool[*xxh3.Hasher](synced.PreallocationBatchSize, func() *xxh3.Hasher {
 		return xxh3.New()
 	})
 	requestsPool = synced.NewBatchPool[*Request](synced.PreallocationBatchSize, func() *Request {
-		r := &Request{
+		return &Request{
 			uniqueQuery: make([]byte, 0, preallocatedBufferCapacity+(maxTagsLen+tagBufferCapacity)),
 		}
-		return r
 	})
 	keyBufferPool = synced.NewBatchPool[[]byte](synced.PreallocationBatchSize, func() []byte {
 		return make([]byte, 0, preallocatedBufferCapacity)
 	})
-	// All this buffers will be stored in sync.Map as interned bytes for some keys. It's mean that this pool is more preallocator than pool.
+	// Used for one-time preallocation; not reused as a typical pool.
 	preallocatorBufferPool = synced.NewBatchPool[[]byte](synced.PreallocationBatchSize, func() []byte {
 		return make([]byte, 0, preallocatedBufferCapacity)
 	})
@@ -53,7 +55,7 @@ var (
 	})
 )
 
-// internSlice returns a shared []byte for identical inputs to reduce allocations.
+// internSlice returns a shared []byte for identical inputs to reduce allocations (true string interning).
 func internSlice(b []byte) []byte {
 	key := string(b)
 
@@ -64,8 +66,7 @@ func internSlice(b []byte) []byte {
 	}
 	interningPool.mu.RUnlock()
 
-	// plays as a preallocator
-	slBytes := preallocatorBufferPool.Get()
+	slBytes := preallocatorBufferPool.Get() // "Plays" as a preallocator, not a true pool.
 	slBytes = slBytes[:0]
 	slBytes = append(slBytes, b...)
 
@@ -76,19 +77,19 @@ func internSlice(b []byte) []byte {
 	return slBytes
 }
 
-// Request holds cached request context data.
+// Request holds normalized, deduplicated, hashed and uniquely queryable representation of a cache request.
 type Request struct {
-	project     []byte
-	domain      []byte
-	language    []byte
-	tags        [][]byte
-	uniqueQuery []byte
-	key         uint64
-	shardKey    uint64
-	releaseFn   func()
+	project     []byte   // Interned project name
+	domain      []byte   // Interned domain
+	language    []byte   // Interned language
+	tags        [][]byte // Array of interned tag values
+	uniqueQuery []byte   // Built query string (for HTTP requests)
+	key         uint64   // xxh3 hash of all above fields (acts as the main cache key)
+	shardKey    uint64   // Which shard this request maps to
+	releaseFn   func()   // Function to release underlying resources/buffers
 }
 
-// NewManualRequest creates a Request with explicit parameters.
+// NewManualRequest creates a Request with explicit parameters, bypassing fasthttp.
 func NewManualRequest(project, domain, language []byte, tags [][]byte) (*Request, error) {
 	r, err := requestsPool.Get().clear().setUp(project, domain, language, tags, func() {}).validate()
 	if err != nil {
@@ -97,7 +98,7 @@ func NewManualRequest(project, domain, language []byte, tags [][]byte) (*Request
 	return r, nil
 }
 
-// NewRequest builds a Request from fasthttp.Args.
+// NewRequest builds a Request from fasthttp.Args, with strict interning and pooling.
 func NewRequest(q *fasthttp.Args) (*Request, error) {
 	var (
 		project         = q.Peek("project[id]")
@@ -112,14 +113,14 @@ func NewRequest(q *fasthttp.Args) (*Request, error) {
 	return r, nil
 }
 
-// setUp initializes the Request fields, interns byte slices and prepares keys.
+// setUp initializes the Request, interns all fields, builds keys, and sets up uniqueQuery.
 func (r *Request) setUp(project, domain, language []byte, tags [][]byte, releaseFn func()) *Request {
-	// strict interning of input slices
+	// Strict interning: all input slices are deduped
 	r.project = internSlice(project)
 	r.domain = internSlice(domain)
 	r.language = internSlice(language)
 
-	// intern each tag value
+	// Intern each tag value
 	for i, tag := range tags {
 		if len(tag) > 0 {
 			tags[i] = internSlice(tag)
@@ -135,7 +136,7 @@ func (r *Request) setUp(project, domain, language []byte, tags [][]byte, release
 	return r
 }
 
-// clear resets Request to initial state (except buffer capacities).
+// clear resets the Request to zero (except for buffer capacity).
 func (r *Request) clear() *Request {
 	r.project = nil
 	r.domain = nil
@@ -147,7 +148,7 @@ func (r *Request) clear() *Request {
 	return r
 }
 
-// validate ensures mandatory fields are set.
+// validate ensures that required fields are set (project, domain, language).
 func (r *Request) validate() (*Request, error) {
 	if len(r.project) == 0 {
 		return nil, errors.New("project is not specified")
@@ -161,7 +162,7 @@ func (r *Request) validate() (*Request, error) {
 	return r, nil
 }
 
-// extractTags collects tag values and returns a release function.
+// extractTags collects choice-like tags from the args, returns them and a release function.
 func extractTags(args *fasthttp.Args) ([][]byte, func()) {
 	var (
 		nullValue   = []byte("null")
@@ -169,7 +170,7 @@ func extractTags(args *fasthttp.Args) ([][]byte, func()) {
 	)
 
 	tagsSls := tagsSlicesPool.Get()
-	// correctly reset each slice
+	// Reset each tag slice
 	for i := range tagsSls {
 		tagsSls[i] = tagsSls[i][:0]
 	}
@@ -179,23 +180,22 @@ func extractTags(args *fasthttp.Args) ([][]byte, func()) {
 		if !bytes.HasPrefix(key, choiceValue) || bytes.Equal(value, nullValue) {
 			return
 		}
-		// append interned tag value
 		tagsSls[i] = internSlice(value)
 		i++
 	})
 
-	// return only actual tags
+	// Only return used tags
 	tags := tagsSls[:i]
 	return tags, func() { tagsSlicesPool.Put(tagsSls) }
 }
 
-// Accessors
+// Getters for all important fields.
 func (r *Request) GetProject() []byte  { return r.project }
 func (r *Request) GetDomain() []byte   { return r.domain }
 func (r *Request) GetLanguage() []byte { return r.language }
 func (r *Request) GetTags() [][]byte   { return r.tags }
 
-// setUpKey computes and stores the unique key for the request.
+// setUpKey computes a unique hash key (xxh3) for this request.
 func (r *Request) setUpKey() uint64 {
 	buf := keyBufferPool.Get()
 	defer keyBufferPool.Put(buf)
@@ -223,18 +223,18 @@ func (r *Request) setUpKey() uint64 {
 	return key
 }
 
-// Key returns the computed hash key.
+// Key returns the computed hash key for the request.
 func (r *Request) Key() uint64 { return r.key }
 
-// ShardKey returns the computed shard key.
+// ShardKey returns the precomputed shard index.
 func (r *Request) ShardKey() uint64 { return r.shardKey }
 
-// setUpShardKey computes the shard based on the key.
+// setUpShardKey computes the shard index from the key.
 func (r *Request) setUpShardKey(key uint64) {
 	r.shardKey = sharded.MapShardKey(key)
 }
 
-// setUpQuery builds the query string buffer.
+// setUpQuery builds the query string for backend usage (uses same buffer for efficiency).
 func (r *Request) setUpQuery() {
 	if r.uniqueQuery == nil {
 		panic("query slice must be set and be alive along all request live")
@@ -266,10 +266,10 @@ func (r *Request) setUpQuery() {
 	r.uniqueQuery = buf
 }
 
-// ToQuery returns the built query.
+// ToQuery returns the generated query string.
 func (r *Request) ToQuery() []byte { return r.uniqueQuery }
 
-// Release resets and returns the Request to the pool.
+// Release releases and resets the request (and any underlying buffer/tag slices) for reuse.
 func (r *Request) Release() {
 	r.clear()
 	r.releaseFn()
