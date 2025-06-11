@@ -12,6 +12,7 @@ import (
 	"gitlab.xbet.lan/v3group/backend/packages/go/httpserver/pkg/httpserver"
 	"gitlab.xbet.lan/v3group/backend/packages/go/httpserver/pkg/httpserver/controller"
 	"gitlab.xbet.lan/v3group/backend/packages/go/httpserver/pkg/httpserver/middleware"
+	"gitlab.xbet.lan/v3group/backend/packages/go/liveness-prober"
 	"gitlab.xbet.lan/v3group/backend/packages/go/metrics"
 	metricscontroller "gitlab.xbet.lan/v3group/backend/packages/go/metrics/controller"
 	prometheusrequestmiddleware "gitlab.xbet.lan/v3group/backend/packages/go/metrics/middleware"
@@ -45,6 +46,7 @@ func New(
 	cache storage.Storage,
 	seoRepo repository.Seo,
 	reader synced.PooledReader,
+	probe liveness.Prober,
 ) (*HttpServer, error) {
 	var err error
 
@@ -67,7 +69,7 @@ func New(
 		return nil, errors.New(MetricsInitFailedErrorMessage)
 	}
 
-	if err = srv.initServer(cache, seoRepo, reader); err != nil {
+	if err = srv.initServer(cache, seoRepo, reader, probe); err != nil {
 		log.Err(err).Msg("server init. failed")
 		return nil, errors.New(InitFailedErrorMessage)
 	}
@@ -126,11 +128,16 @@ func (s *HttpServer) initMetrics() error {
 	return nil
 }
 
-func (s *HttpServer) initServer(cache storage.Storage, seoRepo repository.Seo, reader synced.PooledReader) error {
+func (s *HttpServer) initServer(
+	cache storage.Storage,
+	seoRepo repository.Seo,
+	reader synced.PooledReader,
+	probe liveness.Prober,
+) error {
 	ctx, cancel := context.WithCancel(s.ctx)
 	s.cancel = cancel
 
-	if server, err := httpserver.New(ctx, s.cfg, s.controllers(cache, seoRepo, reader), s.middlewares()); err != nil {
+	if server, err := httpserver.New(ctx, s.cfg, s.controllers(cache, seoRepo, reader, probe), s.middlewares()); err != nil {
 		cancel()
 		log.Err(err).Msg(InitFailedErrorMessage)
 		return errors.New(InitFailedErrorMessage)
@@ -142,8 +149,14 @@ func (s *HttpServer) initServer(cache storage.Storage, seoRepo repository.Seo, r
 }
 
 // controllers returns a slice of server.HttpController[s] for http server (handlers).
-func (s *HttpServer) controllers(cache storage.Storage, seoRepo repository.Seo, reader synced.PooledReader) []controller.HttpController {
+func (s *HttpServer) controllers(
+	cache storage.Storage,
+	seoRepo repository.Seo,
+	reader synced.PooledReader,
+	probe liveness.Prober,
+) []controller.HttpController {
 	return []controller.HttpController{
+		api.NewLivenessController(probe),
 		api.NewCacheController(s.ctx, s.cfg, cache, seoRepo, reader),
 		metricscontroller.NewPrometheusMetrics(s.ctx),
 	}

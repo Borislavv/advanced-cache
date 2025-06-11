@@ -38,9 +38,10 @@ func NewApp(ctx context.Context, cfg *config.Config, probe liveness.Prober) (*Ca
 	reader := synced.NewPooledResponseReader(synced.PreallocationBatchSize)
 	repo := repository.NewSeo(&cfg.Config, reader)
 
-	// Compose the HTTP server (API, metrics, etc)
-	srv, err := server.New(ctx, cfg, store, repo, reader)
+	// Compose the HTTP server (API, metrics and so on)
+	srv, err := server.New(ctx, cfg, store, repo, reader, probe)
 	if err != nil {
+		cancel()
 		return nil, err
 	}
 
@@ -67,8 +68,8 @@ func (c *Cache) Start(gc shutdown.Gracefuller) {
 
 	go func() {
 		defer close(waitCh)
-		c.server.Start()
-		c.probe.Watch(c)
+		c.probe.Watch(c) // Call first due to it does not block the green-thread
+		c.server.Start() // Blocks the green-thread
 	}()
 
 	log.Info().Msg("cache app has been started")
