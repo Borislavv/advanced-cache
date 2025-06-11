@@ -1,4 +1,4 @@
-package wheel
+package timed
 
 import (
 	"context"
@@ -7,8 +7,8 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/list"
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
 	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
+	timemodel "github.com/Borislavv/traefik-http-cache-plugin/pkg/time/model"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
-	model "github.com/Borislavv/traefik-http-cache-plugin/pkg/wheel/model"
 	"github.com/rs/zerolog/log"
 	"strconv"
 	"time"
@@ -21,24 +21,24 @@ var (
 	erroredNumCh   = make(chan struct{}, synced.PreallocationBatchSize)
 )
 
-type OfTime[T model.Spoke] struct {
+type Wheel[T timemodel.Spoke] struct {
 	ctx        context.Context
 	cfg        *config.Config
 	rate       rate.Limiter
-	spokesList *list.List[model.Spoke]
+	spokesList *list.List[timemodel.Spoke]
 	checkCh    <-chan time.Time
-	updateCh   chan model.Spoke
-	removeCh   chan *list.Element[model.Spoke]
+	updateCh   chan timemodel.Spoke
+	removeCh   chan *list.Element[timemodel.Spoke]
 }
 
-func New[T model.Spoke](ctx context.Context, cfg *config.Config) *OfTime[T] {
-	w := &OfTime[T]{
+func New[T timemodel.Spoke](ctx context.Context, cfg *config.Config) *Wheel[T] {
+	w := &Wheel[T]{
 		ctx:        ctx,
 		cfg:        cfg,
-		spokesList: list.New[model.Spoke](true),
+		spokesList: list.New[timemodel.Spoke](true),
 		checkCh:    utils.NewTicker(ctx, time.Second),
-		updateCh:   make(chan model.Spoke, sharded.ShardCount),
-		removeCh:   make(chan *list.Element[model.Spoke], sharded.ShardCount),
+		updateCh:   make(chan timemodel.Spoke, sharded.ShardCount),
+		removeCh:   make(chan *list.Element[timemodel.Spoke], sharded.ShardCount),
 		rate:       rate.NewLimiter(ctx, numOfRefreshesPerSec, numOfRefreshesPerSec),
 	}
 
@@ -50,19 +50,19 @@ func New[T model.Spoke](ctx context.Context, cfg *config.Config) *OfTime[T] {
 	return w
 }
 
-func (w *OfTime[T]) Add(spoke T) {
+func (w *Wheel[T]) Add(spoke T) {
 	spoke.StoreWheelListElement(w.spokesList.PushFront(spoke))
 }
 
-func (w *OfTime[T]) Touch(spoke T) {
+func (w *Wheel[T]) Touch(spoke T) {
 	w.spokesList.MoveToFront(spoke.WheelListElement())
 }
 
-func (w *OfTime[T]) Remove(spoke T) {
+func (w *Wheel[T]) Remove(spoke T) {
 	w.spokesList.Remove(spoke.WheelListElement())
 }
 
-func (w *OfTime[T]) update(spoke model.Spoke) {
+func (w *Wheel[T]) update(spoke timemodel.Spoke) {
 	if err := spoke.Revalidate(w.ctx); err != nil {
 		log.
 			Err(err).
@@ -77,7 +77,7 @@ func (w *OfTime[T]) update(spoke model.Spoke) {
 	refreshedNumCh <- struct{}{}
 }
 
-func (w *OfTime[T]) spawnEventLoop() {
+func (w *Wheel[T]) spawnEventLoop() {
 	go func() {
 		for {
 			select {
@@ -126,7 +126,7 @@ func (w *OfTime[T]) spawnEventLoop() {
 	}()
 }
 
-func (w *OfTime[T]) runLogDebugInfo() {
+func (w *Wheel[T]) runLogDebugInfo() {
 	go func() {
 		refreshesNumPer5Sec := 0
 		erroredNumPer5Sec := 0

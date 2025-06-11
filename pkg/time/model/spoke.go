@@ -1,4 +1,4 @@
-package wheelmodel
+package timemodel
 
 import (
 	"context"
