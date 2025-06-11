@@ -1,6 +1,6 @@
 # traefik-http-cache-plugin
 
-> **A high-performance, sharded in-memory cache with LRU eviction, background refresh, live metrics, and blazing fast HTTP API for SEO page data.**
+> **A high-performance, sharded in-memory cache with LRU eviction, background refresh, live metrics, and blazing fast HTTP API.**
 
 ---
 
@@ -39,7 +39,7 @@
 
 - **API:**
   - `/api/v1/cache/pagedata` endpoint (fasthttp + router) for GET/PUT operations.
-  - Returns cached data when available; on miss, fetches from SEO backend and updates cache transparently.
+  - Returns cached data when available; on miss, fetches from external backend and updates cache transparently.
   - Consistent error handling, JSON responses for 400/503, and rich logging.
 
 - **Configurable:**
@@ -52,10 +52,10 @@
 All major settings are controlled via environment variables:
 
 | Variable                        | Description                                         | Example                |
-|----------------------------------|-----------------------------------------------------|------------------------|
-| `APP_ENV`                       | Environment: `prod`, `dev`, `test`                 | `prod`                 |
+|---------------------------------|-----------------------------------------------------|------------------------|
+| `APP_ENV`                       | Environment: `prod`, `dev`                          | `prod`                 |
 | `APP_DEBUG`                     | Enable debug logging                                | `true`                 |
-| `SEO_URL`                       | Upstream SEO service URL                            | `http://seo:8080/`     |
+| `BACKEND_URL`                   | Upstream external backend URL                       | `http://backend:8080/` |
 | `REVALIDATE_BETA`               | Background refresh beta (0.1...0.9 recommended)     | `0.5`                  |
 | `REVALIDATE_INTERVAL`           | Background revalidation interval                    | `10s`                  |
 | `INIT_STORAGE_LEN_PER_SHARD`    | Initial map size per shard                          | `4096`                 |
