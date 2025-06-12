@@ -16,11 +16,14 @@ import (
 	util "gitlab.xbet.lan/v3group/backend/packages/go/httpserver/pkg/httpserver/util"
 	"net/http"
 	"runtime"
+	"strconv"
 	"time"
 )
 
+// CacheGetPath for getting pagedata from cache via HTTP.
 const CacheGetPath = "/api/v1/cache/pagedata"
 
+// Predefined HTTP response templates for error handling (400/503)
 var (
 	badRequestResponseBytes = []byte(`{
 	  "status": 400,
@@ -30,16 +33,18 @@ var (
 	serviceUnavailableResponseBytes = []byte(`{
 	  "status": 503,
 	  "error": "Service Unavailable",
-	  "message": "` + string(messagePlaceholder) + `",
+	  "message": "` + string(messagePlaceholder) + `"
 	}`)
 	messagePlaceholder = []byte("${message}")
 	zeroLiteral        = "0"
 )
 
+// Buffered channel for request durations (used only if debug enabled)
 var (
 	durCh chan time.Duration
 )
 
+// CacheController handles cache API requests (read/write-through, error reporting, metrics).
 type CacheController struct {
 	cfg     *config.Config
 	ctx     context.Context
@@ -48,6 +53,8 @@ type CacheController struct {
 	reader  synced.PooledReader
 }
 
+// NewCacheController builds a cache API controller with all dependencies.
+// If debug is enabled, launches internal stats logger goroutine.
 func NewCacheController(
 	ctx context.Context,
 	cfg *config.Config,
@@ -63,29 +70,31 @@ func NewCacheController(
 		reader:  reader,
 	}
 	if c.cfg.IsDebugOn() {
-		c.runLogDebugInfo(ctx)
+		c.runLogger(ctx)
 	}
 	return c
 }
 
+// Index is the main HTTP handler for /api/v1/cache/pagedata.
 func (c *CacheController) Index(r *fasthttp.RequestCtx) {
 	f := time.Now()
 
-	ctx, err := util.ExtractCtx(r)
-	if err != nil {
-		ctx = c.ctx
-		log.Warn().Msg(err.Error())
-	}
+	// Extract application context from request, fallback to base context.
+	ctx, cancel := context.WithCancel(c.ctx)
+	defer cancel()
 
+	// Parse request parameters.
 	req, err := model.NewRequest(r.QueryArgs())
 	if err != nil {
 		c.respondThatTheRequestIsBad(err, r)
 		return
 	}
 
+	// Try to get response from cache.
 	resp, rel, found := c.cache.Get(req)
 	defer rel.Release()
 	if !found {
+		// On cache miss, get data from upstream (SEO repo) and save in cache.
 		resp, err = c.seoRepo.PageData(ctx, req)
 		if err != nil {
 			c.respondThatServiceIsTemporaryUnavailable(err, r)
@@ -95,25 +104,29 @@ func (c *CacheController) Index(r *fasthttp.RequestCtx) {
 		defer rel.Release()
 	}
 
-	data := resp.GetData()
+	// Write status, headers, and body from the cached (or fetched) response.
+	data := resp.Data()
 	r.Response.SetStatusCode(data.StatusCode())
 	for key, vv := range data.Headers() {
 		for _, value := range vv {
-			r.Request.Header.Add(key, value)
+			r.Response.Header.Add(key, value)
 		}
 	}
+	// Add revalidation time as Last-Modified
+	r.Response.Header.Add("Last-Modified", resp.RevalidatedAt().Format(http.TimeFormat))
 
-	r.Response.Header.Add("Last-Modified", resp.GetRevalidatedAt().Format(http.TimeFormat))
 	if _, err = util.Write(data.Body(), r); err != nil {
 		c.respondThatServiceIsTemporaryUnavailable(err, r)
 		return
 	}
 
+	// Record the duration in debug mode for metrics.
 	if c.cfg.IsDebugOn() {
 		durCh <- time.Since(f)
 	}
 }
 
+// respondThatServiceIsTemporaryUnavailable returns 503 and logs the error.
 func (c *CacheController) respondThatServiceIsTemporaryUnavailable(err error, ctx *fasthttp.RequestCtx) {
 	log.Err(err).Msg("error occurred while processing request")
 
@@ -123,6 +136,7 @@ func (c *CacheController) respondThatServiceIsTemporaryUnavailable(err error, ct
 	}
 }
 
+// respondThatTheRequestIsBad returns 400 and logs the error.
 func (c *CacheController) respondThatTheRequestIsBad(err error, ctx *fasthttp.RequestCtx) {
 	log.Err(err).Msg("bad request was caught")
 
@@ -132,24 +146,28 @@ func (c *CacheController) respondThatTheRequestIsBad(err error, ctx *fasthttp.Re
 	}
 }
 
+// resolveMessagePlaceholder substitutes ${message} in template with escaped error message.
 func (c *CacheController) resolveMessagePlaceholder(msg []byte, err error) []byte {
 	escaped, _ := json.Marshal(err.Error())
 	return bytes.ReplaceAll(msg, messagePlaceholder, escaped[1:len(escaped)-1])
 }
 
+// AddRoute attaches controller's route(s) to the provided router.
 func (c *CacheController) AddRoute(router *router.Router) {
 	router.GET(CacheGetPath, c.Index)
 }
 
+// stat is an internal structure for windowed request statistics (for debug logging).
 type stat struct {
 	label    string
-	divider  int // in seconds
+	divider  int // window size in seconds
 	tickerCh <-chan time.Time
 	count    int
 	total    time.Duration
 }
 
-func (c *CacheController) runLogDebugInfo(ctx context.Context) {
+// runLogger runs a goroutine to periodically log RPS and avg duration per window, if debug enabled.
+func (c *CacheController) runLogger(ctx context.Context) {
 	durCh = make(chan time.Duration, runtime.GOMAXPROCS(0))
 
 	go func() {
@@ -182,6 +200,7 @@ func (c *CacheController) runLogDebugInfo(ctx context.Context) {
 	}()
 }
 
+// logAndReset prints and resets stat counters for a given window (5s, 1m, etc).
 func (c *CacheController) logAndReset(s *stat) {
 	var avg string
 	if s.count > 0 {
@@ -189,10 +208,14 @@ func (c *CacheController) logAndReset(s *stat) {
 	} else {
 		avg = zeroLiteral
 	}
-	log.Info().Msgf(
-		"[stat] RPS: %d, total req: %d (%s), avg duration %s",
-		s.count/s.divider, s.count, s.label, avg,
-	)
+	rps := strconv.Itoa(s.count / s.divider)
+	log.
+		Info().
+		//Str("target", "server").
+		//Str("period", s.label).
+		//Str("rps", rps).
+		//Str("avgDuration", avg).
+		Msgf("[server][%s] served %d requests (rps: %s, avgDuration: %s)", s.label, s.count, rps, avg)
 	s.count = 0
 	s.total = 0
 }

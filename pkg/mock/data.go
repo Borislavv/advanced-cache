@@ -9,35 +9,37 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 )
 
 const (
-	minStrLen = 8
-	maxStrLen = 1024
+	minStrLen = 8    // Minimum random string length for GenerateRandomString
+	maxStrLen = 1024 // Maximum random string length for GenerateRandomString
 )
 
+// GenerateRandomRequests produces a slice of *model.Request for use in tests and benchmarks.
+// Each request gets a unique combination of project, domain, language, and tags.
 func GenerateRandomRequests(num int) []*model.Request {
+	i := 0
 	list := make([]*model.Request, 0, num)
 
-	i := 0
+	// Iterate over all possible language and project ID combinations until num requests are created
 	for {
 		for _, lng := range localesandlanguages.WebnameList() {
 			for projectID := 1; projectID < 1000; projectID++ {
-				if i > num {
+				if i >= num {
 					return list
 				}
 				req, err := model.NewManualRequest(
-					[]byte(strconv.Itoa(projectID)),
-					[]byte("1x001.com"),
-					[]byte(lng),
-					[][]byte{
+					[]byte(strconv.Itoa(projectID)), // Project ID as []byte
+					[]byte("1x001.com"),             // Fixed domain for testing
+					[]byte(lng),                     // Language
+					[][]byte{ // Tags (variation for entropy)
 						[]byte(`betting`),
 						[]byte(`betting_null`),
 						[]byte(`betting_null_sport`),
-						[]byte(`betting_null_sport_` + strconv.Itoa(i)),
-						[]byte(`betting_null_sport_` + strconv.Itoa(i) + `_` + strconv.Itoa(i*i)),
-						[]byte(`betting_null_sport_` + strconv.Itoa(i) + `_` + strconv.Itoa(i*i) + `_` + strconv.Itoa(projectID*i)),
+						[]byte(`betting_null_sport_` + strconv.Itoa(projectID)),
+						[]byte(`betting_null_sport_` + strconv.Itoa(projectID) + `_` + strconv.Itoa(i)),
+						[]byte(`betting_null_sport_` + strconv.Itoa(projectID) + `_` + strconv.Itoa(i) + `_` + strconv.Itoa(i)),
 					},
 				)
 				if err != nil {
@@ -47,11 +49,11 @@ func GenerateRandomRequests(num int) []*model.Request {
 				i++
 			}
 		}
-
-		i++
 	}
 }
 
+// GenerateRandomResponses generates a list of *model.Response, each linked to a random request and containing
+// random body data. Used for stress/load/benchmark testing of cache systems.
 func GenerateRandomResponses(cfg *config.Config, num int) []*model.Response {
 	headers := http.Header{}
 	headers.Add("Accept", "application/json")
@@ -60,9 +62,13 @@ func GenerateRandomResponses(cfg *config.Config, num int) []*model.Response {
 	list := make([]*model.Response, 0, num)
 	for _, req := range GenerateRandomRequests(num) {
 		data := model.NewData(200, headers, []byte(GenerateRandomString()), func() {})
-		resp, err := model.NewResponse(data, req, cfg, func(ctx context.Context) (data *model.Data, err error) {
-			return data, nil
-		})
+		resp, err := model.NewResponse(
+			data, req, cfg,
+			func(ctx context.Context) (*model.Data, error) {
+				// Dummy revalidator; always returns the same data.
+				return data, nil
+			},
+		)
 		if err != nil {
 			panic(err)
 		}
@@ -71,10 +77,9 @@ func GenerateRandomResponses(cfg *config.Config, num int) []*model.Response {
 	return list
 }
 
+// GenerateRandomString returns a random ASCII string of length between minStrLen and maxStrLen.
 func GenerateRandomString() string {
 	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-
-	rand.Seed(time.Now().UnixNano())
 
 	length := rand.Intn(maxStrLen-minStrLen+1) + minStrLen
 
