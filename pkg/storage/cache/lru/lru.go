@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/repository"
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
 	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
@@ -13,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 )
+
+const dumpDir = "public/dump"
 
 var (
 	maxEvictors    = 4 // Number of concurrent evictor goroutines
@@ -32,16 +35,18 @@ type LRU struct {
 	shardedMap      *sharded.Map[*model.Response] // Sharded storage for cache entries
 	refresher       *Refresher                    // Background refresher (see refresher.go)
 	balancer        *Balancer                     // Helps pick shards to evict from
-	mem             int64                         // Current memory usage (bytes)
-	memoryLimit     int64                         // Hard limit for memory usage (bytes)
-	memoryThreshold int64                         // Threshold for triggering eviction (bytes)
+	backend         repository.Backender
+	mem             int64 // Current memory usage (bytes)
+	memoryLimit     int64 // Hard limit for memory usage (bytes)
+	memoryThreshold int64 // Threshold for triggering eviction (bytes)
 }
 
 // NewLRU constructs a new LRU cache instance and launches eviction and refresh routines.
-func NewLRU(ctx context.Context, cfg *config.Config, shardedMap *sharded.Map[*model.Response]) *LRU {
+func NewLRU(ctx context.Context, cfg *config.Config, backend repository.Backender, shardedMap *sharded.Map[*model.Response]) *LRU {
 	lru := &LRU{
 		ctx:             ctx,
 		cfg:             cfg,
+		backend:         backend,
 		shardedMap:      shardedMap,
 		memoryThreshold: int64(float64(cfg.MemoryLimit) * cfg.MemoryFillThreshold),
 		memoryLimit:     int64(cfg.MemoryLimit)/100 - 1, // Defensive: avoid going exactly to limit
@@ -61,6 +66,9 @@ func NewLRU(ctx context.Context, cfg *config.Config, shardedMap *sharded.Map[*mo
 	if cfg.IsDebugOn() {
 		lru.runLogger()
 	}
+
+	// Load dump of it exists in public/dump dir.
+	lru.loadDumpIfExists()
 
 	return lru
 }
@@ -219,4 +227,20 @@ func (c *LRU) runLogger() {
 			}
 		}
 	}()
+}
+
+func (c *LRU) loadDumpIfExists() {
+	if err := c.LoadFromDir(c.ctx, dumpDir); err != nil {
+		log.Warn().Msg("failed to load dump: " + err.Error())
+	}
+}
+
+func (c *LRU) Stop() {
+	// spawn a new one with limit for k8s timeout before the service will be received SIGKILL
+	dumpCtx, dumpCancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer dumpCancel()
+
+	if err := c.DumpToDir(dumpCtx, dumpDir); err != nil {
+		log.Err(err).Msg("failed to dump cache")
+	}
 }
