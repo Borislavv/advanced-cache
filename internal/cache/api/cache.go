@@ -75,7 +75,7 @@ func NewCacheController(
 	return c
 }
 
-// Index is the main HTTP handler for /api/v1/cache/pagedata.
+// Index is the main HTTP handler for /api/v1/cache.
 func (c *CacheController) Index(r *fasthttp.RequestCtx) {
 	f := time.Now()
 
