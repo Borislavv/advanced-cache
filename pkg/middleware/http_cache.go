@@ -115,7 +115,7 @@ package middleware
 //	defer cancel()
 //
 //	resp, err := model.NewResponse(p.config.Response, clonedWriter.Header().Clone(), req, clonedWriter.body.Bytes(), func() ([]byte, error) {
-//		return p.seoRepo.PageData()
+//		return p.seoRepo.Fetch()
 //	})
 //	if err != nil {
 //		log.Err(err).Msg("failed to make response")
