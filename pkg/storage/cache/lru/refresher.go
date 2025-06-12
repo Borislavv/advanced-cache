@@ -71,7 +71,12 @@ func (r *Refresher) spawnShardsSamplesProvider() {
 			select {
 			case <-r.ctx.Done():
 				return
-			case r.shardsSamplesCh <- r.balancer.randShardNode():
+			case <-r.rate.Chan(): // Throttling (max 1000 checks per second)
+				select {
+				case <-r.ctx.Done():
+					return
+				case r.shardsSamplesCh <- r.balancer.randShardNode():
+				}
 			}
 		}
 	}()
@@ -130,14 +135,8 @@ func (r *Refresher) provideRespRefreshSignal(node *shardNode) {
 			continue
 		}
 
-		resp := elem.Value
-		if resp.ShouldRefresh() {
-			select {
-			case <-r.ctx.Done():
-				return
-			case <-r.rate.Chan():
-				go r.update(resp)
-			}
+		if elem.Value.ShouldRefresh() {
+			go r.update(elem.Value)
 		}
 	}
 }
