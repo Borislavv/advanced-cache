@@ -3,8 +3,8 @@ package mock
 import (
 	"context"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
+	localesandlanguages "github.com/Borislavv/traefik-http-cache-plugin/pkg/locale"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
-	localesandlanguages "gitlab.xbet.lan/v3group/backend/packages/go/locales-and-languages"
 	"math/rand"
 	"net/http"
 	"strconv"
@@ -24,7 +24,7 @@ func GenerateRandomRequests(num int) []*model.Request {
 
 	// Iterate over all possible language and project ID combinations until num requests are created
 	for {
-		for _, lng := range localesandlanguages.WebnameList() {
+		for _, lng := range localesandlanguages.LanguageCodeList() {
 			for projectID := 1; projectID < 1000; projectID++ {
 				if i >= num {
 					return list
