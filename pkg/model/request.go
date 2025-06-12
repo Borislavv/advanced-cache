@@ -27,26 +27,26 @@ var (
 	// interningPool stores unique byte slices to enforce strict interning and avoid duplication.
 	interningPool = &internPool{
 		mu: &sync.RWMutex{},
-		mm: make(map[string][]byte, synced.PreallocationBatchSize*10),
+		mm: make(map[string][]byte, synced.PreallocateBatchSize*10),
 	}
 
 	// Pools for reusable objects and buffers.
-	hasherPool = synced.NewBatchPool[*xxh3.Hasher](synced.PreallocationBatchSize, func() *xxh3.Hasher {
+	hasherPool = synced.NewBatchPool[*xxh3.Hasher](synced.PreallocateBatchSize, func() *xxh3.Hasher {
 		return xxh3.New()
 	})
-	requestsPool = synced.NewBatchPool[*Request](synced.PreallocationBatchSize, func() *Request {
+	requestsPool = synced.NewBatchPool[*Request](synced.PreallocateBatchSize, func() *Request {
 		return &Request{
 			uniqueQuery: make([]byte, 0, preallocatedBufferCapacity+(maxTagsLen+tagBufferCapacity)),
 		}
 	})
-	keyBufferPool = synced.NewBatchPool[[]byte](synced.PreallocationBatchSize, func() []byte {
+	keyBufferPool = synced.NewBatchPool[[]byte](synced.PreallocateBatchSize, func() []byte {
 		return make([]byte, 0, preallocatedBufferCapacity)
 	})
 	// Used for one-time preallocation; not reused as a typical pool.
-	preallocatorBufferPool = synced.NewBatchPool[[]byte](synced.PreallocationBatchSize, func() []byte {
+	preallocatorBufferPool = synced.NewBatchPool[[]byte](synced.PreallocateBatchSize, func() []byte {
 		return make([]byte, 0, preallocatedBufferCapacity)
 	})
-	tagsSlicesPool = synced.NewBatchPool[[][]byte](synced.PreallocationBatchSize, func() [][]byte {
+	tagsSlicesPool = synced.NewBatchPool[[][]byte](synced.PreallocateBatchSize, func() [][]byte {
 		batch := make([][]byte, maxTagsLen)
 		for i := range batch {
 			batch[i] = make([]byte, 0, tagBufferCapacity)
