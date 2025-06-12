@@ -37,14 +37,14 @@ func NewBackend(cfg *config.Cache, reader synced.PooledReader) *Backend {
 // It also attaches a revalidator closure for future background refreshes.
 func (s *Backend) Fetch(ctx context.Context, req *model.Request) (*model.Response, error) {
 	// Fetch data from backend.
-	data, err := s.requestPagedata(ctx, req)
+	data, err := s.requestExternalBackend(ctx, req)
 	if err != nil {
-		return nil, errors.New("failed to request pagedata: " + err.Error())
+		return nil, errors.New("failed to request external backend: " + err.Error())
 	}
 
 	// Prepare a closure to allow future revalidation using the same logic/endpoint.
 	Revalidator := func(ctx context.Context) (*model.Data, error) {
-		return s.requestPagedata(ctx, req)
+		return s.requestExternalBackend(ctx, req)
 	}
 
 	// Build a new response object, which contains the cache payload, request, config and revalidator.
@@ -58,13 +58,13 @@ func (s *Backend) Fetch(ctx context.Context, req *model.Request) (*model.Respons
 
 func (s *Backend) RevalidatorMaker(req *model.Request) func(ctx context.Context) (*model.Data, error) {
 	return func(ctx context.Context) (*model.Data, error) {
-		return s.requestPagedata(ctx, req)
+		return s.requestExternalBackend(ctx, req)
 	}
 }
 
-// requestPagedata actually performs the HTTP request to the SEO backend and parses the response.
+// requestExternalBackend actually performs the HTTP request to the SEO backend and parses the response.
 // Returns a Data object suitable for caching.
-func (s *Backend) requestPagedata(ctx context.Context, req *model.Request) (*model.Data, error) {
+func (s *Backend) requestExternalBackend(ctx context.Context, req *model.Request) (*model.Data, error) {
 	// Apply a hard timeout for the HTTP request.
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
