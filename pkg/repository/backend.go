@@ -62,7 +62,7 @@ func (s *Backend) RevalidatorMaker(req *model.Request) func(ctx context.Context)
 	}
 }
 
-// requestExternalBackend actually performs the HTTP request to the SEO backend and parses the response.
+// requestExternalBackend actually performs the HTTP request to backend and parses the response.
 // Returns a Data object suitable for caching.
 func (s *Backend) requestExternalBackend(ctx context.Context, req *model.Request) (*model.Data, error) {
 	// Apply a hard timeout for the HTTP request.
