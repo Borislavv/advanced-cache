@@ -21,7 +21,7 @@ import (
 )
 
 // CacheGetPath for getting pagedata from cache via HTTP.
-const CacheGetPath = "/api/v1/cache/pagedata"
+const CacheGetPath = "/api/v1/cache"
 
 // Predefined HTTP response templates for error handling (400/503)
 var (
@@ -128,20 +128,22 @@ func (c *CacheController) Index(r *fasthttp.RequestCtx) {
 
 // respondThatServiceIsTemporaryUnavailable returns 503 and logs the error.
 func (c *CacheController) respondThatServiceIsTemporaryUnavailable(err error, ctx *fasthttp.RequestCtx) {
+	log.Error().Err(err).Msg("[cache-controller] handle request error: " + err.Error()) // Don't move it down due to error will be rewritten.
+
 	ctx.SetStatusCode(fasthttp.StatusServiceUnavailable)
 	if _, err = serverutils.Write(c.resolveMessagePlaceholder(serviceUnavailableResponseBytes, err), ctx); err != nil {
 		log.Err(err).Msg("failed to write into *fasthttp.RequestCtx")
 	}
-	log.Err(err).Msg("[cache-controller] handle request error")
 }
 
 // respondThatTheRequestIsBad returns 400 and logs the error.
 func (c *CacheController) respondThatTheRequestIsBad(err error, ctx *fasthttp.RequestCtx) {
+	log.Err(err).Msg("[cache-controller] bad request: " + err.Error()) // Don't move it down due to error will be rewritten.
+
 	ctx.SetStatusCode(fasthttp.StatusBadRequest)
 	if _, err = serverutils.Write(c.resolveMessagePlaceholder(badRequestResponseBytes, err), ctx); err != nil {
 		log.Err(err).Msg("failed to write into *fasthttp.RequestCtx")
 	}
-	log.Err(err).Msg("[cache-controller] bad request")
 }
 
 // resolveMessagePlaceholder substitutes ${message} in template with escaped error message.
