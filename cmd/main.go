@@ -14,11 +14,15 @@ import (
 	"time"
 )
 
+// Initializes environment variables from .env files and binds them using Viper.
+// This allows overriding any value via environment variables.
 func init() {
+	// Load .env and .env.local files for configuration overrides.
 	if err := godotenv.Overload(".env", ".env.local"); err != nil {
 		panic(err)
 	}
 
+	// Bind all relevant environment variables using Viper.
 	viper.AutomaticEnv()
 	_ = viper.BindEnv("APP_ENV")
 	_ = viper.BindEnv("APP_DEBUG")
@@ -37,41 +41,58 @@ func init() {
 	_ = viper.BindEnv("LIVENESS_PROBE_FAILED_TIMEOUT")
 }
 
+// setMaxProcs automatically sets the optimal GOMAXPROCS value (CPU parallelism)
+// based on the available CPUs and cgroup/docker CPU quotas (uses automaxprocs).
 func setMaxProcs() {
 	if _, err := maxprocs.Set(); err != nil {
 		log.Err(err).Msg("setting up GOMAXPROCS value failed")
 		panic(err)
 	}
-	log.Info().Msgf("optimized GOMAXPROCS=%d was sat up", runtime.GOMAXPROCS(0))
+	log.Info().Msgf("optimized GOMAXPROCS=%d was set up", runtime.GOMAXPROCS(0))
 }
 
+// loadCfg loads the configuration struct from environment variables
+// and computes any derived configuration values.
 func loadCfg() *config.Config {
 	cfg := &config.Config{}
 	if err := viper.Unmarshal(cfg); err != nil {
 		log.Err(err).Msg("failed to unmarshal config from envs")
 		panic(err)
 	}
+	// Calculate the refresh duration threshold as a function of revalidate interval and beta.
 	cfg.RefreshDurationThreshold = time.Duration(float64(cfg.RevalidateInterval) * cfg.RevalidateBeta)
 	return cfg
 }
 
+// Main entrypoint: configures and starts the cache application.
 func main() {
+	// Create a root context for graceful shutdown and cancellation.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Optimize GOMAXPROCS for the current environment.
 	setMaxProcs()
+
+	// Load the application configuration from env vars.
 	cfg := loadCfg()
+
+	// Setup graceful shutdown handler (SIGTERM, SIGINT, etc).
 	gc := shutdown.NewGraceful(ctx, cancel)
 	gc.SetGracefulTimeout(time.Second * 10)
+
+	// Initialize liveness probe for Kubernetes/Cloud health checks.
 	probe := liveness.NewProbe(cfg.LivenessProbeTimeout)
 
+	// Initialize and start the cache application.
 	if app, err := cache.NewApp(ctx, cfg, probe); err != nil {
-		log.Err(err).Msg("failed init. cache app")
+		log.Err(err).Msg("failed to init cache app")
 	} else {
+		// Register app for graceful shutdown.
 		gc.Add(1)
 		go app.Start(gc)
 	}
 
+	// Listen for OS signals or context cancellation and wait for graceful shutdown.
 	if err := gc.ListenCancelAndAwait(); err != nil {
 		log.Err(err).Msg("failed to gracefully shut down service")
 	}
