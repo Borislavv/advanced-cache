@@ -22,7 +22,8 @@ type Cache struct {
 	//   - 0.5 is a reasonable starting point; 1.0 is aggressive; 0.0 disables background refreshing.
 	RevalidateBeta float64 `mapstructure:"REVALIDATE_BETA"`
 
-	// RevalidateInterval is the base interval for periodic revalidation (e.g., "5m", "10s").
+	// RevalidateInterval is the base interval for periodic revalidation (e.g., "5m", "1h", "1d").
+	// On external backend error the stale TTL will be 10% of original interval.
 	RevalidateInterval time.Duration `mapstructure:"REVALIDATE_INTERVAL"`
 
 	// InitStorageLengthPerShard controls initial allocation for storage shard maps.
