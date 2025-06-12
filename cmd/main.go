@@ -45,10 +45,10 @@ func init() {
 // based on the available CPUs and cgroup/docker CPU quotas (uses automaxprocs).
 func setMaxProcs() {
 	if _, err := maxprocs.Set(); err != nil {
-		log.Err(err).Msg("setting up GOMAXPROCS value failed")
+		log.Err(err).Msg("[main] setting up GOMAXPROCS value failed")
 		panic(err)
 	}
-	log.Info().Msgf("optimized GOMAXPROCS=%d was set up", runtime.GOMAXPROCS(0))
+	log.Info().Msgf("[main] optimized GOMAXPROCS=%d was set up", runtime.GOMAXPROCS(0))
 }
 
 // loadCfg loads the configuration struct from environment variables
@@ -56,7 +56,7 @@ func setMaxProcs() {
 func loadCfg() *config.Config {
 	cfg := &config.Config{}
 	if err := viper.Unmarshal(cfg); err != nil {
-		log.Err(err).Msg("failed to unmarshal config from envs")
+		log.Err(err).Msg("[main] failed to unmarshal config from envs")
 		panic(err)
 	}
 	// Calculate the refresh duration threshold as a function of revalidate interval and beta.
@@ -66,7 +66,7 @@ func loadCfg() *config.Config {
 
 // Main entrypoint: configures and starts the cache application.
 func main() {
-	// Create a root context for graceful shutdown and cancellation.
+	// Create a root context for gracefulShutdown shutdown and cancellation.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -76,24 +76,24 @@ func main() {
 	// Load the application configuration from env vars.
 	cfg := loadCfg()
 
-	// Setup graceful shutdown handler (SIGTERM, SIGINT, etc).
-	gc := shutdown.NewGraceful(ctx, cancel)
-	gc.SetGracefulTimeout(time.Second * 10)
+	// Setup gracefulShutdown shutdown handler (SIGTERM, SIGINT, etc).
+	gracefulShutdown := shutdown.NewGraceful(ctx, cancel)
+	gracefulShutdown.SetGracefulTimeout(time.Second * 10)
 
 	// Initialize liveness probe for Kubernetes/Cloud health checks.
 	probe := liveness.NewProbe(cfg.LivenessProbeTimeout)
 
 	// Initialize and start the cache application.
 	if app, err := cache.NewApp(ctx, cfg, probe); err != nil {
-		log.Err(err).Msg("failed to init cache app")
+		log.Err(err).Msg("[main] failed to init cache app")
 	} else {
-		// Register app for graceful shutdown.
-		gc.Add(1)
-		go app.Start(gc)
+		// Register app for gracefulShutdown shutdown.
+		gracefulShutdown.Add(1)
+		go app.Start(gracefulShutdown)
 	}
 
-	// Listen for OS signals or context cancellation and wait for graceful shutdown.
-	if err := gc.ListenCancelAndAwait(); err != nil {
-		log.Err(err).Msg("failed to gracefully shut down service")
+	// Listen for OS signals or context cancellation and wait for gracefulShutdown shutdown.
+	if err := gracefulShutdown.ListenCancelAndAwait(); err != nil {
+		log.Err(err).Msg("[main] failed to gracefully shut down service")
 	}
 }
