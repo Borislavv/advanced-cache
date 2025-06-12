@@ -9,11 +9,11 @@ import (
 
 var (
 	successResponseBytes = []byte(`{
-	  "status": 200
+	  "status": 200,
       "message": "I'm fine :D'"
 	}`)
 	failedResponseBytes = []byte(`{
-	  "status": 503
+	  "status": 503,
       "message": "I'm tired :('"
 	}`)
 )
@@ -30,14 +30,14 @@ func (c *LivenessController) Probe(ctx *fasthttp.RequestCtx) {
 	if c.probe.IsAlive() {
 		ctx.SetStatusCode(fasthttp.StatusOK)
 		if _, err := ctx.Write(successResponseBytes); err != nil {
-			log.Err(err).Msg("failed to write success response into *fasthttp.RequestCtx")
-			return
+			log.Err(err).Msg("[probe-controller] failed to write success response into *fasthttp.RequestCtx")
 		}
+		return
 	}
 
 	ctx.SetStatusCode(fasthttp.StatusServiceUnavailable)
 	if _, err := ctx.Write(failedResponseBytes); err != nil {
-		log.Err(err).Msg("failed to write failed response into *fasthttp.RequestCtx")
+		log.Err(err).Msg("[probe-controller] failed to write failed response into *fasthttp.RequestCtx")
 	}
 }
 
