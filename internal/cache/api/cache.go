@@ -49,7 +49,7 @@ type CacheController struct {
 	cfg     *config.Config
 	ctx     context.Context
 	cache   storage.Storage
-	seoRepo repository.Backender
+	backend repository.Backender
 	reader  synced.PooledReader
 }
 
@@ -59,14 +59,14 @@ func NewCacheController(
 	ctx context.Context,
 	cfg *config.Config,
 	cache storage.Storage,
-	seoRepo repository.Backender,
+	backend repository.Backender,
 	reader synced.PooledReader,
 ) *CacheController {
 	c := &CacheController{
 		cfg:     cfg,
 		ctx:     ctx,
 		cache:   cache,
-		seoRepo: seoRepo,
+		backend: backend,
 		reader:  reader,
 	}
 	if c.cfg.IsDebugOn() {
@@ -94,8 +94,8 @@ func (c *CacheController) Index(r *fasthttp.RequestCtx) {
 	resp, rel, found := c.cache.Get(req)
 	defer rel.Release()
 	if !found {
-		// On cache miss, get data from upstream (SEO repo) and save in cache.
-		resp, err = c.seoRepo.Fetch(ctx, req)
+		// On cache miss, get data from upstream backend and save in cache.
+		resp, err = c.backend.Fetch(ctx, req)
 		if err != nil {
 			c.respondThatServiceIsTemporaryUnavailable(err, r)
 			return
