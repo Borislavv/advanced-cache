@@ -49,7 +49,7 @@ type CacheController struct {
 	cfg     *config.Config
 	ctx     context.Context
 	cache   storage.Storage
-	seoRepo repository.Seo
+	seoRepo repository.Backender
 	reader  synced.PooledReader
 }
 
@@ -59,7 +59,7 @@ func NewCacheController(
 	ctx context.Context,
 	cfg *config.Config,
 	cache storage.Storage,
-	seoRepo repository.Seo,
+	seoRepo repository.Backender,
 	reader synced.PooledReader,
 ) *CacheController {
 	c := &CacheController{
@@ -95,7 +95,7 @@ func (c *CacheController) Index(r *fasthttp.RequestCtx) {
 	defer rel.Release()
 	if !found {
 		// On cache miss, get data from upstream (SEO repo) and save in cache.
-		resp, err = c.seoRepo.PageData(ctx, req)
+		resp, err = c.seoRepo.Fetch(ctx, req)
 		if err != nil {
 			c.respondThatServiceIsTemporaryUnavailable(err, r)
 			return
@@ -128,22 +128,20 @@ func (c *CacheController) Index(r *fasthttp.RequestCtx) {
 
 // respondThatServiceIsTemporaryUnavailable returns 503 and logs the error.
 func (c *CacheController) respondThatServiceIsTemporaryUnavailable(err error, ctx *fasthttp.RequestCtx) {
-	log.Err(err).Msg("error occurred while processing request")
-
 	ctx.SetStatusCode(fasthttp.StatusServiceUnavailable)
 	if _, err = util.Write(c.resolveMessagePlaceholder(serviceUnavailableResponseBytes, err), ctx); err != nil {
 		log.Err(err).Msg("failed to write into *fasthttp.RequestCtx")
 	}
+	log.Err(err).Msg("[cache-controller] handle request error")
 }
 
 // respondThatTheRequestIsBad returns 400 and logs the error.
 func (c *CacheController) respondThatTheRequestIsBad(err error, ctx *fasthttp.RequestCtx) {
-	log.Err(err).Msg("bad request was caught")
-
 	ctx.SetStatusCode(fasthttp.StatusBadRequest)
 	if _, err = util.Write(c.resolveMessagePlaceholder(badRequestResponseBytes, err), ctx); err != nil {
 		log.Err(err).Msg("failed to write into *fasthttp.RequestCtx")
 	}
+	log.Err(err).Msg("[cache-controller] bad request")
 }
 
 // resolveMessagePlaceholder substitutes ${message} in template with escaped error message.
@@ -211,11 +209,11 @@ func (c *CacheController) logAndReset(s *stat) {
 	rps := strconv.Itoa(s.count / s.divider)
 	log.
 		Info().
-		//Str("target", "server").
+		//Str("target", "cache-controller").
 		//Str("period", s.label).
 		//Str("rps", rps).
 		//Str("avgDuration", avg).
-		Msgf("[server][%s] served %d requests (rps: %s, avgDuration: %s)", s.label, s.count, rps, avg)
+		Msgf("[cache-controller][%s] served %d requests (rps: %s, avgDuration: %s)", s.label, s.count, rps, avg)
 	s.count = 0
 	s.total = 0
 }

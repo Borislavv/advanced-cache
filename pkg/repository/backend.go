@@ -12,29 +12,30 @@ import (
 
 const requestTimeout = time.Second * 10
 
-// Seo defines the interface for a repository that provides SEO page data.
-type Seo interface {
-	PageData(ctx context.Context, req *model.Request) (*model.Response, error)
+// Backender defines the interface for a repository that provides SEO page data.
+type Backender interface {
+	Fetch(ctx context.Context, req *model.Request) (*model.Response, error)
+	RevalidatorMaker(req *model.Request) func(ctx context.Context) (*model.Data, error)
 }
 
-// SeoRepository implements the Seo interface.
+// Backend implements the Backender interface.
 // It fetches and constructs SEO page data responses from an external backend.
-type SeoRepository struct {
+type Backend struct {
 	cfg    *config.Config      // Global configuration (SEO backend URL, etc)
 	reader synced.PooledReader // Efficient reader for HTTP responses
 }
 
-// NewSeo creates a new instance of SeoRepository.
-func NewSeo(cfg *config.Config, reader synced.PooledReader) *SeoRepository {
-	return &SeoRepository{
+// NewBackend creates a new instance of Backend.
+func NewBackend(cfg *config.Config, reader synced.PooledReader) *Backend {
+	return &Backend{
 		cfg:    cfg,
 		reader: reader,
 	}
 }
 
-// PageData fetches page data for the given request and constructs a cacheable response.
+// Fetch method fetches page data for the given request and constructs a cacheable response.
 // It also attaches a revalidator closure for future background refreshes.
-func (s *SeoRepository) PageData(ctx context.Context, req *model.Request) (*model.Response, error) {
+func (s *Backend) Fetch(ctx context.Context, req *model.Request) (*model.Response, error) {
 	// Fetch data from backend.
 	data, err := s.requestPagedata(ctx, req)
 	if err != nil {
@@ -42,12 +43,12 @@ func (s *SeoRepository) PageData(ctx context.Context, req *model.Request) (*mode
 	}
 
 	// Prepare a closure to allow future revalidation using the same logic/endpoint.
-	revalidator := func(ctx context.Context) (*model.Data, error) {
+	Revalidator := func(ctx context.Context) (*model.Data, error) {
 		return s.requestPagedata(ctx, req)
 	}
 
 	// Build a new response object, which contains the cache payload, request, config and revalidator.
-	resp, err := model.NewResponse(data, req, s.cfg, revalidator)
+	resp, err := model.NewResponse(data, req, s.cfg, Revalidator)
 	if err != nil {
 		return nil, errors.New("failed to create response: " + err.Error())
 	}
@@ -55,9 +56,15 @@ func (s *SeoRepository) PageData(ctx context.Context, req *model.Request) (*mode
 	return resp, nil
 }
 
+func (s *Backend) RevalidatorMaker(req *model.Request) func(ctx context.Context) (*model.Data, error) {
+	return func(ctx context.Context) (*model.Data, error) {
+		return s.requestPagedata(ctx, req)
+	}
+}
+
 // requestPagedata actually performs the HTTP request to the SEO backend and parses the response.
 // Returns a Data object suitable for caching.
-func (s *SeoRepository) requestPagedata(ctx context.Context, req *model.Request) (*model.Data, error) {
+func (s *Backend) requestPagedata(ctx context.Context, req *model.Request) (*model.Data, error) {
 	// Apply a hard timeout for the HTTP request.
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
