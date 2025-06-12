@@ -7,13 +7,13 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/internal/cache/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/repository"
+	serverutils "github.com/Borislavv/traefik-http-cache-plugin/pkg/server/utils"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage"
 	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
 	"github.com/fasthttp/router"
 	"github.com/rs/zerolog/log"
 	"github.com/valyala/fasthttp"
-	util "gitlab.xbet.lan/v3group/backend/packages/go/httpserver/pkg/httpserver/util"
 	"net/http"
 	"runtime"
 	"strconv"
@@ -115,7 +115,7 @@ func (c *CacheController) Index(r *fasthttp.RequestCtx) {
 	// Add revalidation time as Last-Modified
 	r.Response.Header.Add("Last-Modified", resp.RevalidatedAt().Format(http.TimeFormat))
 
-	if _, err = util.Write(data.Body(), r); err != nil {
+	if _, err = serverutils.Write(data.Body(), r); err != nil {
 		c.respondThatServiceIsTemporaryUnavailable(err, r)
 		return
 	}
@@ -129,7 +129,7 @@ func (c *CacheController) Index(r *fasthttp.RequestCtx) {
 // respondThatServiceIsTemporaryUnavailable returns 503 and logs the error.
 func (c *CacheController) respondThatServiceIsTemporaryUnavailable(err error, ctx *fasthttp.RequestCtx) {
 	ctx.SetStatusCode(fasthttp.StatusServiceUnavailable)
-	if _, err = util.Write(c.resolveMessagePlaceholder(serviceUnavailableResponseBytes, err), ctx); err != nil {
+	if _, err = serverutils.Write(c.resolveMessagePlaceholder(serviceUnavailableResponseBytes, err), ctx); err != nil {
 		log.Err(err).Msg("failed to write into *fasthttp.RequestCtx")
 	}
 	log.Err(err).Msg("[cache-controller] handle request error")
@@ -138,7 +138,7 @@ func (c *CacheController) respondThatServiceIsTemporaryUnavailable(err error, ct
 // respondThatTheRequestIsBad returns 400 and logs the error.
 func (c *CacheController) respondThatTheRequestIsBad(err error, ctx *fasthttp.RequestCtx) {
 	ctx.SetStatusCode(fasthttp.StatusBadRequest)
-	if _, err = util.Write(c.resolveMessagePlaceholder(badRequestResponseBytes, err), ctx); err != nil {
+	if _, err = serverutils.Write(c.resolveMessagePlaceholder(badRequestResponseBytes, err), ctx); err != nil {
 		log.Err(err).Msg("failed to write into *fasthttp.RequestCtx")
 	}
 	log.Err(err).Msg("[cache-controller] bad request")

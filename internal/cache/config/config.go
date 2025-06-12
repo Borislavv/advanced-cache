@@ -2,7 +2,7 @@ package config
 
 import (
 	cacheConfig "github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
-	"gitlab.xbet.lan/v3group/backend/packages/go/httpserver/pkg/httpserver/config"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/server/config"
 )
 
 type Config struct {

@@ -9,7 +9,6 @@ require (
 	github.com/spf13/viper v1.20.1
 	github.com/valyala/fasthttp v1.59.0
 	github.com/zeebo/xxh3 v1.0.2
-	gitlab.xbet.lan/v3group/backend/packages/go/httpserver v1.1.1
 	gitlab.xbet.lan/v3group/backend/packages/go/liveness-prober v0.0.8
 	gitlab.xbet.lan/v3group/backend/packages/go/locales-and-languages v1.0.0
 	gitlab.xbet.lan/v3group/backend/packages/go/metrics v1.1.0
@@ -42,7 +41,6 @@ require (
 	github.com/spf13/pflag v1.0.6 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
-	gitlab.xbet.lan/v3group/backend/packages/go/logger v1.0.0 // indirect
 	go.uber.org/atomic v1.9.0 // indirect
 	go.uber.org/multierr v1.9.0 // indirect
 	golang.org/x/sys v0.33.0 // indirect

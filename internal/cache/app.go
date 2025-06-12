@@ -6,11 +6,11 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/internal/cache/server"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/repository"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/shutdown"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage"
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
 	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
 	"github.com/rs/zerolog/log"
-	"gitlab.xbet.lan/v3group/backend/packages/go/graceful-shutdown/pkg/shutdown"
 	"gitlab.xbet.lan/v3group/backend/packages/go/liveness-prober"
 )
 
