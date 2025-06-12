@@ -23,20 +23,20 @@ const gzipThreshold = 1024 // Minimum body size to apply gzip compression
 // -- Internal pools for efficient memory management --
 
 var (
-	dataPool = synced.NewBatchPool[*Data](synced.PreallocationBatchSize, func() *Data {
+	dataPool = synced.NewBatchPool[*Data](synced.PreallocateBatchSize, func() *Data {
 		return new(Data)
 	})
-	ResponsePool = synced.NewBatchPool[*Response](synced.PreallocationBatchSize, func() *Response {
+	ResponsePool = synced.NewBatchPool[*Response](synced.PreallocateBatchSize, func() *Response {
 		return &Response{
 			data:        &atomic.Pointer[Data]{},
 			request:     &atomic.Pointer[Request]{},
 			lruListElem: &atomic.Pointer[list.Element[*Response]]{},
 		}
 	})
-	gzipBufferPool = synced.NewBatchPool[*bytes.Buffer](synced.PreallocationBatchSize, func() *bytes.Buffer {
+	gzipBufferPool = synced.NewBatchPool[*bytes.Buffer](synced.PreallocateBatchSize, func() *bytes.Buffer {
 		return new(bytes.Buffer)
 	})
-	gzipWriterPool = synced.NewBatchPool[*gzip.Writer](synced.PreallocationBatchSize, func() *gzip.Writer {
+	gzipWriterPool = synced.NewBatchPool[*gzip.Writer](synced.PreallocateBatchSize, func() *gzip.Writer {
 		w, err := gzip.NewWriterLevel(nil, gzip.BestSpeed)
 		if err != nil {
 			panic("failed to Init. gzip writer: " + err.Error())
@@ -136,7 +136,7 @@ type Response struct {
 func NewResponse(
 	data *Data,
 	req *Request,
-	cfg *config.Config,
+	cfg *config.Cache,
 	revalidator func(ctx context.Context) (data *Data, err error),
 ) (*Response, error) {
 	return ResponsePool.Get().Init().clear().SetUp(cfg, data, req, revalidator), nil
@@ -157,7 +157,7 @@ func (r *Response) Init() *Response {
 }
 
 // SetUp stores the Data, Request, and config-driven fields into the Response.
-func (r *Response) SetUp(cfg *config.Config, data *Data, req *Request, revalidator func(ctx context.Context) (data *Data, err error)) *Response {
+func (r *Response) SetUp(cfg *config.Cache, data *Data, req *Request, revalidator func(ctx context.Context) (data *Data, err error)) *Response {
 	r.data.Store(data)
 	r.request.Store(req)
 	r.revalidator = revalidator
