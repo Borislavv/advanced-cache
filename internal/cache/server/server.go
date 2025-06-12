@@ -22,8 +22,8 @@ import (
 
 // Error messages used for server and metrics initialization.
 var (
-	InitFailedErrorMessage        = "server init. failed"
-	MetricsInitFailedErrorMessage = "failed to init. prometheus metrics"
+	InitFailedErrorMessage        = "[server] init. failed"
+	MetricsInitFailedErrorMessage = "[server] init. prometheus metrics failed"
 )
 
 // Http interface exposes methods for starting and liveness probing.
@@ -41,6 +41,7 @@ type HttpServer struct {
 	metrics       *metrics.Metrics
 	server        *httpserver.HTTP
 	isServerAlive *atomic.Bool
+	db            storage.Storage
 }
 
 // New creates a new HttpServer, initializing metrics and the HTTP server itself.
@@ -48,8 +49,8 @@ type HttpServer struct {
 func New(
 	ctx context.Context,
 	cfg *config.Config,
-	cache storage.Storage,
-	seoRepo repository.Seo,
+	db storage.Storage,
+	seoRepo repository.Backender,
 	reader synced.PooledReader,
 	probe liveness.Prober,
 ) (*HttpServer, error) {
@@ -67,18 +68,19 @@ func New(
 		ctx:           ctx,
 		cancel:        cancel,
 		cfg:           cfg,
+		db:            db,
 		isServerAlive: &atomic.Bool{},
 	}
 
 	// Initialize Prometheus or other metrics.
 	if err = srv.initMetrics(); err != nil {
-		log.Err(err).Msg("metrics init. failed")
+		log.Err(err).Msg(MetricsInitFailedErrorMessage)
 		return nil, errors.New(MetricsInitFailedErrorMessage)
 	}
 
 	// Initialize HTTP server with all controllers and middlewares.
-	if err = srv.initServer(cache, seoRepo, reader, probe); err != nil {
-		log.Err(err).Msg("server init. failed")
+	if err = srv.initServer(db, seoRepo, reader, probe); err != nil {
+		log.Err(err).Msg(InitFailedErrorMessage)
 		return nil, errors.New(InitFailedErrorMessage)
 	}
 
@@ -104,6 +106,7 @@ func (s *HttpServer) Start() {
 // stop cancels the context, signaling shutdown to all server goroutines.
 func (s *HttpServer) stop() {
 	s.cancel()
+	s.db.Stop()
 }
 
 // IsAlive returns true if the server is marked as alive.
@@ -145,7 +148,7 @@ func (s *HttpServer) initMetrics() error {
 // initServer creates the HTTP server instance, sets up controllers and middlewares, and stores the result.
 func (s *HttpServer) initServer(
 	cache storage.Storage,
-	seoRepo repository.Seo,
+	seoRepo repository.Backender,
 	reader synced.PooledReader,
 	probe liveness.Prober,
 ) error {
@@ -167,7 +170,7 @@ func (s *HttpServer) initServer(
 // controllers returns all HTTP controllers for the server (endpoints/handlers).
 func (s *HttpServer) controllers(
 	cache storage.Storage,
-	seoRepo repository.Seo,
+	seoRepo repository.Backender,
 	reader synced.PooledReader,
 	probe liveness.Prober,
 ) []controller.HttpController {
