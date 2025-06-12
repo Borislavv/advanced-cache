@@ -54,7 +54,7 @@ func GenerateRandomRequests(num int) []*model.Request {
 
 // GenerateRandomResponses generates a list of *model.Response, each linked to a random request and containing
 // random body data. Used for stress/load/benchmark testing of cache systems.
-func GenerateRandomResponses(cfg *config.Config, num int) []*model.Response {
+func GenerateRandomResponses(cfg *config.Cache, num int) []*model.Response {
 	headers := http.Header{}
 	headers.Add("Accept", "application/json")
 	headers.Add("Content-Type", "application/json")
