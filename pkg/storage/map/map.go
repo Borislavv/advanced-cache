@@ -1,6 +1,7 @@
 package sharded
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 )
@@ -73,7 +74,7 @@ func (smap *Map[V]) Release(key uint64) (freed uintptr, listElem any, ok bool) {
 }
 
 // Walk applies fn to all key/value pairs in the shard, optionally locking for writing.
-func (shard *Shard[V]) Walk(fn func(uint64, V), lockWrite bool) {
+func (shard *Shard[V]) Walk(ctx context.Context, fn func(uint64, V), lockWrite bool) {
 	if lockWrite {
 		shard.Lock()
 		defer shard.Unlock()
@@ -82,7 +83,12 @@ func (shard *Shard[V]) Walk(fn func(uint64, V), lockWrite bool) {
 		defer shard.RUnlock()
 	}
 	for k, v := range shard.items {
-		fn(k, v)
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			fn(k, v)
+		}
 	}
 }
 
