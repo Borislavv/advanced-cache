@@ -34,12 +34,12 @@ func NewApp(ctx context.Context, cfg *config.Config, probe liveness.Prober) (*Ca
 
 	// Setup sharded map for high-concurrency cache storage.
 	shardedMap := sharded.NewMap[*model.Response](cfg.InitStorageLengthPerShard)
-	store := storage.New(ctx, &cfg.Config, shardedMap)
 	reader := synced.NewPooledResponseReader(synced.PreallocationBatchSize)
-	repo := repository.NewSeo(&cfg.Config, reader)
+	backend := repository.NewBackend(&cfg.Config, reader)
+	db := storage.New(ctx, &cfg.Config, backend, shardedMap)
 
 	// Compose the HTTP server (API, metrics and so on)
-	srv, err := server.New(ctx, cfg, store, repo, reader, probe)
+	srv, err := server.New(ctx, cfg, db, backend, reader, probe)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -62,7 +62,7 @@ func (c *Cache) Start(gc shutdown.Gracefuller) {
 		gc.Done()
 	}()
 
-	log.Info().Msg("starting cache app")
+	log.Info().Msg("[app] starting cache")
 
 	waitCh := make(chan struct{})
 
@@ -72,23 +72,23 @@ func (c *Cache) Start(gc shutdown.Gracefuller) {
 		c.server.Start() // Blocks the green-thread
 	}()
 
-	log.Info().Msg("cache app has been started")
+	log.Info().Msg("[app] cache has been started")
 
 	<-waitCh // Wait until the server exits
 }
 
 // stop cancels the main application context and logs shutdown.
 func (c *Cache) stop() {
-	log.Info().Msg("stopping cache app")
+	log.Info().Msg("[app] stopping cache")
 	c.cancel()
-	log.Info().Msg("cache app has been stopped")
+	log.Info().Msg("[app] cache has been stopped")
 }
 
 // IsAlive is called by liveness probes to check app health.
 // Returns false if the HTTP server is not alive.
 func (c *Cache) IsAlive(_ context.Context) bool {
 	if !c.server.IsAlive() {
-		log.Info().Msg("http server has gone away")
+		log.Info().Msg("[app] http server has gone away")
 		return false
 	}
 	return true
