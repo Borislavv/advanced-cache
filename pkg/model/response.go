@@ -7,7 +7,7 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/list"
 	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
-	wheelmodel "github.com/Borislavv/traefik-http-cache-plugin/pkg/wheel/model"
+	timemodel "github.com/Borislavv/traefik-http-cache-plugin/pkg/time/model"
 	"math"
 	"math/rand/v2"
 	"net/http"
@@ -29,7 +29,7 @@ var (
 			data:          &atomic.Pointer[Data]{},
 			request:       &atomic.Pointer[Request]{},
 			lruListElem:   &atomic.Pointer[list.Element[*Response]]{},
-			timeWheelElem: &atomic.Pointer[list.Element[wheelmodel.Spoke]]{},
+			timeWheelElem: &atomic.Pointer[list.Element[timemodel.Spoke]]{},
 		}
 	})
 	gzipBufferPool = synced.NewBatchPool[*bytes.Buffer](synced.PreallocationBatchSize, func() *bytes.Buffer {
@@ -116,10 +116,10 @@ func (d *Data) Release() {
 
 // Response is the main cache object, holding the request, payload, metadata, and list pointers.
 type Response struct {
-	request       *atomic.Pointer[Request]                        // Associated request
-	data          *atomic.Pointer[Data]                           // Cached data
-	lruListElem   *atomic.Pointer[list.Element[*Response]]        // Pointer for LRU list (per-shard)
-	timeWheelElem *atomic.Pointer[list.Element[wheelmodel.Spoke]] // Pointer for wheel/bucket-based background refresh
+	request       *atomic.Pointer[Request]                       // Associated request
+	data          *atomic.Pointer[Data]                          // Cached data
+	lruListElem   *atomic.Pointer[list.Element[*Response]]       // Pointer for LRU list (per-shard)
+	timeWheelElem *atomic.Pointer[list.Element[timemodel.Spoke]] // Pointer for wheel/bucket-based background refresh
 
 	revalidator func(ctx context.Context) (data *Data, err error) // Closure for refresh/revalidation
 
@@ -281,12 +281,12 @@ func (r *Response) SetLruListElement(el *list.Element[*Response]) {
 }
 
 // WheelListElement returns the wheel list element pointer (for background refresh scheduling).
-func (r *Response) WheelListElement() *list.Element[wheelmodel.Spoke] {
+func (r *Response) WheelListElement() *list.Element[timemodel.Spoke] {
 	return r.timeWheelElem.Load()
 }
 
 // StoreWheelListElement sets the wheel list element pointer.
-func (r *Response) StoreWheelListElement(elem *list.Element[wheelmodel.Spoke]) {
+func (r *Response) StoreWheelListElement(elem *list.Element[timemodel.Spoke]) {
 	r.timeWheelElem.Store(elem)
 }
 
