@@ -114,17 +114,25 @@ func (r *Refresher) update(resp *model.Response) {
 // For each candidate, if ShouldRefresh() returns true and rate limiting allows, triggers an asynchronous refresh.
 func (r *Refresher) provideRespRefreshSignal(node *shardNode) {
 	lru := node.lruList
-
 	length := lru.Len()
 	if length == 0 {
 		return
 	}
-	// Prevent excessive sampling if the LRU is very short.
-	if length-refreshSamples > refreshSamples {
-		length -= refreshSamples
+
+	// Uses round-robbin algo. when storage len is too short for sampling.
+	if length <= refreshSamples*10 {
+		elem := lru.Back()
+		for elem != nil {
+			if elem.Value != nil && elem.Value.ShouldRefresh() {
+				go r.update(elem.Value)
+			}
+			elem = elem.Prev()
+		}
+		return
 	}
 
-	// Sample from the cold (tail) side of the LRU.
+	// Uses sampling when storage len reached the threshold (refreshSamples*100=~320).
+	// Sampling algo. will be more effective from the threshold.
 	for i := 0; i < refreshSamples; i++ {
 		elem := lru.Back()
 		offset := rand.Intn(length)
@@ -134,7 +142,6 @@ func (r *Refresher) provideRespRefreshSignal(node *shardNode) {
 		if elem == nil || elem.Value == nil {
 			continue
 		}
-
 		if elem.Value.ShouldRefresh() {
 			go r.update(elem.Value)
 		}
