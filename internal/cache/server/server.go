@@ -78,7 +78,7 @@ func New(
 		isServerAlive: &atomic.Bool{},
 	}
 
-	// Initialize Prometheus or other metrics.
+	// Initialize Metrics or other metrics.
 	if err = srv.initMetrics(); err != nil {
 		log.Err(err).Msg(MetricsInitFailedErrorMessage)
 		return nil, errors.New(MetricsInitFailedErrorMessage)
@@ -140,7 +140,7 @@ func (s *HttpServer) initCtx(ctx context.Context) {
 	s.cancel = cancel
 }
 
-// initMetrics initializes Prometheus (or custom) metrics registry and binds it to the server.
+// initMetrics initializes Metrics (or custom) metrics registry and binds it to the server.
 func (s *HttpServer) initMetrics() error {
 	prometheusMetrics, err := metrics.New()
 	if err != nil {
@@ -173,7 +173,7 @@ func (s *HttpServer) controllers() []controller.HttpController {
 	return []controller.HttpController{
 		api.NewLivenessController(s.probe),                              // Liveness/healthcheck endpoint
 		api.NewCacheController(s.ctx, s.cfg, s.db, s.backend, s.reader), // Main cache handler
-		controller2.NewPrometheusMetrics(s.ctx),                         // Prometheus metrics endpoint
+		controller2.NewPrometheusMetrics(s.ctx),                         // Metrics metrics endpoint
 	}
 }
 
@@ -182,6 +182,6 @@ func (s *HttpServer) middlewares() []middleware.HttpMiddleware {
 	return []middleware.HttpMiddleware{
 		/** exec 1st. */ middleware.NewApplicationJsonMiddleware(), // Sets Content-Type
 		/** exec 2nd. */ middleware.NewWatermarkMiddleware(s.ctx, s.cfg), // Adds watermark info
-		/** exec 3rd. */ middleware2.NewPrometheusMetrics(s.ctx, s.metrics), // Prometheus instrumentation
+		/** exec 3rd. */ middleware2.NewPrometheusMetrics(s.ctx, s.metrics), // Metrics instrumentation
 	}
 }
