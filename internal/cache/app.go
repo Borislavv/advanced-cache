@@ -14,36 +14,48 @@ import (
 	"gitlab.xbet.lan/v3group/backend/packages/go/liveness-prober"
 )
 
+// App defines the cache application lifecycle interface.
 type App interface {
 	Start()
 }
 
+// Cache encapsulates the entire cache application state, including HTTP server, config, and probes.
 type Cache struct {
-	cfg    *config.Config
-	ctx    context.Context
-	cancel context.CancelFunc
-	probe  liveness.Prober
-	server server.Http
+	cfg    *config.Config     // Application configuration
+	ctx    context.Context    // Application context for cancellation and shutdown
+	cancel context.CancelFunc // Cancel function for ctx
+	probe  liveness.Prober    // Liveness probe integration
+	server server.Http        // HTTP server (implements business logic and API)
 }
 
+// NewApp builds a new Cache app, wiring together storage, repo, reader, and server.
 func NewApp(ctx context.Context, cfg *config.Config, probe liveness.Prober) (*Cache, error) {
 	ctx, cancel := context.WithCancel(ctx)
-	_ = cancel
 
-	cacheCfg := &cfg.Config
+	// Setup sharded map for high-concurrency cache storage.
 	shardedMap := sharded.NewMap[*model.Response](cfg.InitStorageLengthPerShard)
-	//wheel := time.NewWheel(ctx, shardedMap)
-	store := storage.New(ctx, cacheCfg, shardedMap)
+	store := storage.New(ctx, &cfg.Config, shardedMap)
 	reader := synced.NewPooledResponseReader(synced.PreallocationBatchSize)
-	repo := repository.NewSeo(cacheCfg, reader)
+	repo := repository.NewSeo(&cfg.Config, reader)
 
-	if srv, err := server.New(ctx, cfg, store, repo, reader); err != nil {
+	// Compose the HTTP server (API, metrics and so on)
+	srv, err := server.New(ctx, cfg, store, repo, reader, probe)
+	if err != nil {
+		cancel()
 		return nil, err
-	} else {
-		return &Cache{ctx: ctx, cancel: cancel, cfg: cfg, probe: probe, server: srv}, nil
 	}
+
+	return &Cache{
+		ctx:    ctx,
+		cancel: cancel,
+		cfg:    cfg,
+		probe:  probe,
+		server: srv,
+	}, nil
 }
 
+// Start runs the cache server and liveness probe, and handles graceful shutdown.
+// The Gracefuller interface is expected to call Done() when shutdown is complete.
 func (c *Cache) Start(gc shutdown.Gracefuller) {
 	defer func() {
 		c.stop()
@@ -56,21 +68,24 @@ func (c *Cache) Start(gc shutdown.Gracefuller) {
 
 	go func() {
 		defer close(waitCh)
-		c.server.Start()
-		c.probe.Watch(c)
+		c.probe.Watch(c) // Call first due to it does not block the green-thread
+		c.server.Start() // Blocks the green-thread
 	}()
 
 	log.Info().Msg("cache app has been started")
 
-	<-waitCh
+	<-waitCh // Wait until the server exits
 }
 
+// stop cancels the main application context and logs shutdown.
 func (c *Cache) stop() {
 	log.Info().Msg("stopping cache app")
 	c.cancel()
 	log.Info().Msg("cache app has been stopped")
 }
 
+// IsAlive is called by liveness probes to check app health.
+// Returns false if the HTTP server is not alive.
 func (c *Cache) IsAlive(_ context.Context) bool {
 	if !c.server.IsAlive() {
 		log.Info().Msg("http server has gone away")

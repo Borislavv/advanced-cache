@@ -5,6 +5,7 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
+	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
 	"github.com/rs/zerolog/log"
 	"runtime"
@@ -14,47 +15,58 @@ import (
 )
 
 var (
-	maxEvictors    = 4
-	evictionStatCh = make(chan evictionStat, maxEvictors*100)
+	maxEvictors    = 4 // Number of concurrent evictor goroutines
+	evictionStatCh = make(chan evictionStat, maxEvictors*synced.PreallocationBatchSize)
 )
 
+// evictionStat carries statistics for each eviction batch.
 type evictionStat struct {
-	items int
-	mem   uintptr
+	items int     // Number of evicted items
+	mem   uintptr // Total freed memory
 }
 
+// LRU is a memory-aware, sharded LRU cache with background eviction and refresh support.
 type LRU struct {
-	ctx             context.Context
-	cfg             *config.Config
-	shardedMap      *sharded.Map[*model.Response]
-	balancer        *Balancer
-	mem             int64
-	memoryLimit     int64
-	memoryThreshold int64
+	ctx             context.Context               // Main context for lifecycle control
+	cfg             *config.Config                // Cache configuration
+	shardedMap      *sharded.Map[*model.Response] // Sharded storage for cache entries
+	refresher       *Refresher                    // Background refresher (see refresher.go)
+	balancer        *Balancer                     // Helps pick shards to evict from
+	mem             int64                         // Current memory usage (bytes)
+	memoryLimit     int64                         // Hard limit for memory usage (bytes)
+	memoryThreshold int64                         // Threshold for triggering eviction (bytes)
 }
 
+// NewLRU constructs a new LRU cache instance and launches eviction and refresh routines.
 func NewLRU(ctx context.Context, cfg *config.Config, shardedMap *sharded.Map[*model.Response]) *LRU {
 	lru := &LRU{
 		ctx:             ctx,
 		cfg:             cfg,
 		shardedMap:      shardedMap,
 		memoryThreshold: int64(float64(cfg.MemoryLimit) * cfg.MemoryFillThreshold),
-		memoryLimit:     int64(cfg.MemoryLimit)/100 - 1,
+		memoryLimit:     int64(cfg.MemoryLimit)/100 - 1, // Defensive: avoid going exactly to limit
 	}
 
+	// Balancer is used to track and select overloaded shards for eviction.
 	lru.balancer = NewBalancer(lru.shardedMap)
+	// Register all existing shards with the balancer.
 	lru.shardedMap.WalkShards(func(shardKey uint64, shard *sharded.Shard[*model.Response]) {
 		lru.balancer.register(shard)
 	})
 
+	// Launch background refresher and evictors.
+	lru.refresher = NewRefresher(ctx, cfg, lru.balancer)
+	lru.refresher.RunRefresher()
 	lru.runEvictors()
 	if cfg.IsDebugOn() {
-		lru.runLogDebugInfo()
+		lru.runLogger()
 	}
 
 	return lru
 }
 
+// Get retrieves a response by request and bumps its LRU position.
+// Returns: (response, releaser, found).
 func (c *LRU) Get(req *model.Request) (*model.Response, *sharded.Releaser[*model.Response], bool) {
 	resp, releaser, found := c.shardedMap.Get(req.Key(), req.ShardKey())
 	if found {
@@ -64,43 +76,50 @@ func (c *LRU) Get(req *model.Request) (*model.Response, *sharded.Releaser[*model
 	return nil, nil, false
 }
 
+// Set inserts or updates a response in the cache, updating memory usage and LRU position.
 func (c *LRU) Set(new *model.Response) *sharded.Releaser[*model.Response] {
-	existing, releaser, found := c.shardedMap.Get(new.GetRequest().Key(), new.GetRequest().ShardKey())
+	existing, releaser, found := c.shardedMap.Get(new.Request().Key(), new.Request().ShardKey())
 	if found {
 		c.update(existing, new)
 		return releaser
 	}
-	c.set(new)
-	return nil
+	return c.set(new)
 }
 
+// touch bumps the LRU position of an existing entry (MoveToFront) and increases its refcount.
 func (c *LRU) touch(existing *model.Response) {
 	existing.IncRefCount()
-	c.balancer.move(existing.GetRequest().ShardKey(), existing.GetListElement())
+	c.balancer.move(existing.Request().ShardKey(), existing.LruListElement())
 }
 
+// update refreshes memory accounting and LRU position for an updated entry.
 func (c *LRU) update(existing, new *model.Response) {
 	atomic.AddInt64(&c.mem, int64(existing.Size()-new.Size()))
 	c.touch(existing)
-	c.balancer.move(new.GetRequest().ShardKey(), existing.GetListElement())
+	c.balancer.move(new.Request().ShardKey(), existing.LruListElement())
 }
 
-func (c *LRU) set(new *model.Response) {
+// set inserts a new response, updates memory usage and registers in balancer.
+func (c *LRU) set(new *model.Response) *sharded.Releaser[*model.Response] {
 	atomic.AddInt64(&c.mem, int64(new.Size()))
 	c.balancer.set(new)
-	c.shardedMap.Set(new.GetRequest().Key(), new)
+	return c.shardedMap.Set(new)
 }
 
-func (c *LRU) del(req *model.Request) (freedMem uintptr, isHit bool) {
-	return c.balancer.remove(req.Key(), req.ShardKey())
+// del removes an entry and returns the amount of freed memory and whether it was present.
+func (c *LRU) del(resp *model.Response) (freedMem uintptr, isHit bool) {
+	return c.balancer.remove(resp.Key(), resp.ShardKey())
 }
 
+// runEvictors launches multiple evictor goroutines for concurrent eviction.
 func (c *LRU) runEvictors() {
 	for id := 0; id < maxEvictors; id++ {
 		go c.evictor(id)
 	}
 }
 
+// evictor is the main background eviction loop for one worker.
+// Each worker tries to bring memory usage under the threshold by evicting from most loaded shards.
 func (c *LRU) evictor(id int) {
 	for {
 		select {
@@ -111,8 +130,9 @@ func (c *LRU) evictor(id int) {
 				items, memory := c.evictUntilWithinLimit(id)
 				if c.cfg.IsDebugOn() && (items > 0 || memory > 0) {
 					select {
+					case <-c.ctx.Done():
+						return
 					case evictionStatCh <- evictionStat{items: items, mem: memory}:
-					default:
 					}
 				}
 			}
@@ -121,10 +141,13 @@ func (c *LRU) evictor(id int) {
 	}
 }
 
+// shouldEvict checks if current memory usage has reached or exceeded the threshold.
 func (c *LRU) shouldEvict() bool {
 	return atomic.LoadInt64(&c.mem) >= c.memoryThreshold
 }
 
+// evictUntilWithinLimit repeatedly removes entries from the most loaded shard (tail of LRU)
+// until memory drops below threshold or no more can be evicted.
 func (c *LRU) evictUntilWithinLimit(id int) (items int, mem uintptr) {
 	for atomic.LoadInt64(&c.mem) > c.memoryThreshold {
 		shard, found := c.balancer.mostLoaded(id)
@@ -133,6 +156,7 @@ func (c *LRU) evictUntilWithinLimit(id int) (items int, mem uintptr) {
 		}
 		back := shard.lruList.Back()
 		if back == nil || back.Value == nil {
+			// Defensive: try to remove empty element to avoid leaks
 			shard.lruList.Remove(back)
 			continue
 		}
@@ -147,11 +171,14 @@ func (c *LRU) evictUntilWithinLimit(id int) (items int, mem uintptr) {
 	return
 }
 
-func (c *LRU) runLogDebugInfo() {
+// runLogger emits detailed stats about evictions, memory, and GC activity every 5 seconds if debugging is enabled.
+func (c *LRU) runLogger() {
 	go func() {
 		ticker := utils.NewTicker(c.ctx, 5*time.Second)
-		var evictsNumPer5Sec int
-		var evictsMemPer5Sec uintptr
+		var (
+			evictsNumPer5Sec int
+			evictsMemPer5Sec uintptr
+		)
 		for {
 			select {
 			case <-c.ctx.Done():
@@ -162,12 +189,31 @@ func (c *LRU) runLogDebugInfo() {
 			case <-ticker:
 				var m runtime.MemStats
 				runtime.ReadMemStats(&m)
-				log.Debug().Msgf("[lru]: evicted [n: %d, mem: %d bytes] (5s), "+
-					"storage [memUsage: %s, memLimit: %s, len: %d], sys [alloc: %s, totalAlloc: %s, sysAlloc: %s, routines: %d, GC: %s]",
-					evictsNumPer5Sec, evictsMemPer5Sec,
-					utils.FmtMem(uintptr(atomic.LoadInt64(&c.mem))), utils.FmtMem(uintptr(c.cfg.MemoryLimit)),
-					c.shardedMap.Len(), utils.FmtMem(uintptr(m.Alloc)), utils.FmtMem(uintptr(m.TotalAlloc)), utils.FmtMem(uintptr(m.Sys)),
-					runtime.NumGoroutine(), strconv.Itoa(int(m.NumGC)))
+
+				var (
+					mem        = utils.FmtMem(uintptr(atomic.LoadInt64(&c.mem)))
+					length     = strconv.Itoa(int(c.shardedMap.Len()))
+					gc         = strconv.Itoa(int(m.NumGC))
+					limit      = utils.FmtMem(uintptr(c.cfg.MemoryLimit))
+					goroutines = strconv.Itoa(runtime.NumGoroutine())
+					alloc      = utils.FmtMem(uintptr(m.Alloc))
+					freedMem   = utils.FmtMem(evictsMemPer5Sec)
+				)
+
+				log.
+					Info().
+					//Str("target", "lru").
+					//Str("mem", mem).
+					//Str("len", length).
+					//Str("GC", gc).
+					//Str("memLimit", limit).
+					//Str("goroutines", goroutines).
+					Msgf(
+						"[lru][5s] evicted (items: %d, mem: %s), "+
+							"storage (usage: %s, len: %s, limit: %s), sys (alloc: %s, goroutines: %s, GC: %s)",
+						evictsNumPer5Sec, freedMem, mem, length, limit, alloc, goroutines, gc,
+					)
+
 				evictsNumPer5Sec = 0
 				evictsMemPer5Sec = 0
 			}

@@ -2,12 +2,11 @@ package storage
 
 import (
 	"context"
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/cache/lru"
-	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
-
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/cache"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/cache/lru"
+	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
 )
 
 type Storage interface {

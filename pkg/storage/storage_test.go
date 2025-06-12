@@ -61,7 +61,7 @@ func BenchmarkReadFromStorage1000TimesPerIter(b *testing.B) {
 		i := 0
 		for pb.Next() {
 			for j := 0; j < 1000; j++ {
-				_, release, _ := db.Get(responses[(i*j)%length].GetRequest())
+				_, release, _ := db.Get(responses[(i*j)%length].Request())
 				release.Release()
 			}
 			i += 1000
@@ -143,7 +143,7 @@ func BenchmarkGetAllocs(b *testing.B) {
 	db := New(ctx, cfg, shardedMap)
 	resp := mock.GenerateRandomResponses(cfg, 1)[0]
 	db.Set(resp)
-	req := resp.GetRequest()
+	req := resp.Request()
 
 	allocs := testing.AllocsPerRun(100000, func() {
 		db.Get(req)
