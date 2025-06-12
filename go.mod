@@ -42,7 +42,6 @@ require (
 	github.com/spf13/pflag v1.0.6 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
-	gitlab.xbet.lan/v3group/backend/packages/go/graceful-shutdown v1.1.0 // indirect
 	gitlab.xbet.lan/v3group/backend/packages/go/logger v1.0.0 // indirect
 	go.uber.org/atomic v1.9.0 // indirect
 	go.uber.org/multierr v1.9.0 // indirect

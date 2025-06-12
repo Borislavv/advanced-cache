@@ -4,10 +4,10 @@ import (
 	"context"
 	"github.com/Borislavv/traefik-http-cache-plugin/internal/cache"
 	"github.com/Borislavv/traefik-http-cache-plugin/internal/cache/config"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/shutdown"
 	"github.com/joho/godotenv"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
-	"gitlab.xbet.lan/v3group/backend/packages/go/graceful-shutdown/pkg/shutdown"
 	"gitlab.xbet.lan/v3group/backend/packages/go/liveness-prober"
 	"go.uber.org/automaxprocs/maxprocs"
 	"runtime"
@@ -78,7 +78,7 @@ func main() {
 
 	// Setup gracefulShutdown shutdown handler (SIGTERM, SIGINT, etc).
 	gracefulShutdown := shutdown.NewGraceful(ctx, cancel)
-	gracefulShutdown.SetGracefulTimeout(time.Second * 10)
+	gracefulShutdown.SetGracefulTimeout(time.Millisecond * 9500) // 9.5s
 
 	// Initialize liveness probe for Kubernetes/Cloud health checks.
 	probe := liveness.NewProbe(cfg.LivenessProbeTimeout)
@@ -94,6 +94,6 @@ func main() {
 
 	// Listen for OS signals or context cancellation and wait for gracefulShutdown shutdown.
 	if err := gracefulShutdown.ListenCancelAndAwait(); err != nil {
-		log.Err(err).Msg("[main] failed to gracefully shut down service")
+		log.Err(err).Msg("failed to gracefully shut down service")
 	}
 }
