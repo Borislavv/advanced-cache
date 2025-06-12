@@ -124,7 +124,7 @@ Build and run as a standalone binary, Docker, or in Kubernetes. All configuratio
 ## Author & Mainteiner
 
 - **Author: Glazunov Borislav**
-- **Telegram:** @BorislavGlazunov
+- **Telegram: @BorislavGlazunov**
 - **Email:** glazunov2142@gmail.com
 
 
