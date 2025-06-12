@@ -69,7 +69,7 @@ func (s *Backend) requestExternalBackend(ctx context.Context, req *model.Request
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 
-	url := s.cfg.SeoUrl
+	url := s.cfg.BackendUrl
 	query := req.ToQuery()
 
 	// Efficiently concatenate base URL and query.

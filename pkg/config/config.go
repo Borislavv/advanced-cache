@@ -12,9 +12,9 @@ const (
 // Cache is the main application configuration struct.
 // All fields are loaded via mapstructure for compatibility with envconfig/viper/unmarshalers.
 type Cache struct {
-	AppEnv   string `mapstructure:"APP_ENV"`   // Application environment: "prod", "dev", or "test"
-	AppDebug bool   `mapstructure:"APP_DEBUG"` // Enable debug logging and features
-	SeoUrl   string `mapstructure:"SEO_URL"`   // Upstream SEO service base URL
+	AppEnv     string `mapstructure:"APP_ENV"`     // Application environment: "prod", "dev", or "test"
+	AppDebug   bool   `mapstructure:"APP_DEBUG"`   // Enable debug logging and features
+	BackendUrl string `mapstructure:"BACKEND_URL"` // Upstream backend service base URL
 
 	// RevalidateBeta controls the probability distribution for background refresh of cached items.
 	//   - Must be in the range [0.1, 0.9] (0 disables, 1 is always refresh, 0.5 is typical).

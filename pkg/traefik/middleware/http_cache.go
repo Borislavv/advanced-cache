@@ -18,7 +18,7 @@ package middleware
 //var internalServerErrorJson = []byte(`{"error": {"message": "Internal server error."}}`)
 //
 //type Cache struct {
-//	SeoUrl string `mapstructure:"SEO_URL"`
+//	BackendUrl string `mapstructure:"SEO_URL"`
 //	// RevalidateBeta is a value which will be used for generate
 //	// random time point for refresh response (must be from 0.1 to 0.9).
 //	// Don't use absolute values like 0 and 1 due it will be leading to CPU peaks usage.
@@ -41,7 +41,7 @@ package middleware
 //		MemoryLimit:               1024 * 1024 * 256,
 //		RevalidateBeta:            0.4,
 //		RevalidateInterval:        time.Minute * 30,
-//		SeoUrl:                    "https://seo-master.lux.kube.xbet.lan/api/v2/pagedata",
+//		BackendUrl:                    "https://seo-master.lux.kube.xbet.lan/api/v2/pagedata",
 //	}
 //}
 //
@@ -56,7 +56,7 @@ package middleware
 //
 //func New(ctx context.Context, next http.Handler, config *Cache, name string) http.Handler {
 //	cacheCfg := &cfg.Cache{
-//		SeoUrl:                    config.SeoUrl,
+//		BackendUrl:                    config.BackendUrl,
 //		RevalidateBeta:            config.RevalidateBeta,
 //		RevalidateInterval:        config.RevalidateInterval,
 //		InitStorageLengthPerShard: config.InitStorageLengthPerShard,
