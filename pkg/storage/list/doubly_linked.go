@@ -229,7 +229,13 @@ func (l *List[T]) MoveToFront(e *Element[T]) {
 		l.mu.Lock()
 		defer l.mu.Unlock()
 	}
-	if e.list != l || (l.root != nil && l.root.next == e) {
+	if e == nil {
+		panic("e is nil")
+	}
+	if e.list != l {
+		return
+	}
+	if l.root != nil && l.root.next == e {
 		return
 	}
 	// see comment in List.Remove about initialization of l
