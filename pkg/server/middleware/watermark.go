@@ -8,10 +8,10 @@ import (
 
 type WatermarkMiddleware struct {
 	ctx    context.Context
-	config config.Configurator
+	config fasthttpconfig.Configurator
 }
 
-func NewWatermarkMiddleware(ctx context.Context, config config.Configurator) *WatermarkMiddleware {
+func NewWatermarkMiddleware(ctx context.Context, config fasthttpconfig.Configurator) *WatermarkMiddleware {
 	return &WatermarkMiddleware{ctx: ctx, config: config}
 }
 

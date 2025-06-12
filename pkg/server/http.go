@@ -15,12 +15,12 @@ import (
 type HTTP struct {
 	ctx    context.Context
 	server *fasthttp.Server
-	config config.Configurator
+	config fasthttpconfig.Configurator
 }
 
 func New(
 	ctx context.Context,
-	config config.Configurator,
+	config fasthttpconfig.Configurator,
 	controllers []controller.HttpController,
 	middlewares []middleware.HttpMiddleware,
 ) (*HTTP, error) {

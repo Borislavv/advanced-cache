@@ -10,10 +10,10 @@ import (
 
 type Duration struct {
 	ctx    context.Context
-	config config.Configurator
+	config fasthttpconfig.Configurator
 }
 
-func NewDuration(ctx context.Context, config config.Configurator) *Duration {
+func NewDuration(ctx context.Context, config fasthttpconfig.Configurator) *Duration {
 	return &Duration{ctx: ctx, config: config}
 }
 

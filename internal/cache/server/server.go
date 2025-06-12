@@ -7,7 +7,7 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/internal/cache/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/k8s/probe/liveness"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/prometheus/metrics"
-	controller2 "github.com/Borislavv/traefik-http-cache-plugin/pkg/prometheus/metrics/controller"
+	api2 "github.com/Borislavv/traefik-http-cache-plugin/pkg/prometheus/metrics/controller"
 	middleware2 "github.com/Borislavv/traefik-http-cache-plugin/pkg/prometheus/metrics/middleware"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/repository"
 	httpserver "github.com/Borislavv/traefik-http-cache-plugin/pkg/server"
@@ -173,7 +173,7 @@ func (s *HttpServer) controllers() []controller.HttpController {
 	return []controller.HttpController{
 		api.NewLivenessController(s.probe),                              // Liveness/healthcheck endpoint
 		api.NewCacheController(s.ctx, s.cfg, s.db, s.backend, s.reader), // Main cache handler
-		controller2.NewPrometheusMetrics(s.ctx),                         // Metrics metrics endpoint
+		api2.NewPrometheusMetrics(s.ctx),                                // Metrics metrics endpoint
 	}
 }
 

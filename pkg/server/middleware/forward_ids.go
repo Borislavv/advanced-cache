@@ -16,10 +16,10 @@ const (
 
 type ForwardIDsMiddleware struct {
 	ctx    context.Context
-	config config.Configurator
+	config fasthttpconfig.Configurator
 }
 
-func NewForwardIDsMiddleware(ctx context.Context, config config.Configurator) *ForwardIDsMiddleware {
+func NewForwardIDsMiddleware(ctx context.Context, config fasthttpconfig.Configurator) *ForwardIDsMiddleware {
 	return &ForwardIDsMiddleware{ctx: ctx, config: config}
 }
 

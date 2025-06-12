@@ -9,10 +9,10 @@ import (
 
 type InitCtxMiddleware struct {
 	ctx    context.Context
-	config config.Configurator
+	config fasthttpconfig.Configurator
 }
 
-func NewInitCtxMiddleware(ctx context.Context, config config.Configurator) *InitCtxMiddleware {
+func NewInitCtxMiddleware(ctx context.Context, config fasthttpconfig.Configurator) *InitCtxMiddleware {
 	return &InitCtxMiddleware{ctx: ctx, config: config}
 }
 
