@@ -51,18 +51,18 @@
 
 All major settings are controlled via environment variables:
 
-| Variable                        | Description                                         | Example                |
-|---------------------------------|-----------------------------------------------------|------------------------|
-| `APP_ENV`                       | Environment: `prod`, `dev`                          | `prod`                 |
-| `APP_DEBUG`                     | Enable debug logging                                | `true`                 |
-| `BACKEND_URL`                   | Upstream external backend URL                       | `http://backend:8080/` |
-| `REVALIDATE_BETA`               | Background refresh beta (0.1...0.9 recommended)     | `0.5`                  |
-| `REVALIDATE_INTERVAL`           | Background revalidation interval                    | `10s`                  |
-| `INIT_STORAGE_LEN_PER_SHARD`    | Initial map size per shard                          | `4096`                 |
-| `EVICTION_ALGO`                 | Eviction strategy (e.g., `lru`)                     | `lru`                  |
-| `MEMORY_FILL_THRESHOLD`         | Memory usage threshold to trigger eviction          | `0.7`                  |
-| `MEMORY_LIMIT`                  | Hard memory limit in bytes                          | `4294967296` (4GB)     |
-| `LIVENESS_PROBE_FAILED_TIMEOUT` | Liveness probe fail timeout                         | `5s`                   |
+| Variable                        | Description                                                             | Example                |
+|---------------------------------|-------------------------------------------------------------------------|------------------------|
+| `APP_ENV`                       | Environment: `prod`, `dev`                                              | `prod`                 |
+| `APP_DEBUG`                     | Enable debug logging                                                    | `true`                 |
+| `BACKEND_URL`                   | Upstream external backend URL                                           | `http://backend:8080/` |
+| `REVALIDATE_BETA`               | Background refresh beta (0.1...0.9 recommended)                         | `0.5`                  |
+| `REVALIDATE_INTERVAL`           | Background revalidation interval (stale TTL on error = 10% of interval) | `10h`                  |
+| `INIT_STORAGE_LEN_PER_SHARD`    | Initial map size per shard                                              | `4096`                 |
+| `EVICTION_ALGO`                 | Eviction strategy (e.g., `lru`)                                         | `lru`                  |
+| `MEMORY_FILL_THRESHOLD`         | Memory usage threshold to trigger eviction                              | `0.7`                  |
+| `MEMORY_LIMIT`                  | Hard memory limit in bytes                                              | `4294967296` (4GB)     |
+| `LIVENESS_PROBE_FAILED_TIMEOUT` | Liveness probe fail timeout                                             | `5s`                   |
 
 ---
 

@@ -163,8 +163,16 @@ func (r *Response) SetUp(cfg *config.Cache, data *Data, req *Request, revalidato
 	r.revalidator = revalidator
 	r.revalidatedAt = time.Now().UnixNano()
 	r.beta = int64(cfg.RevalidateBeta * 100)
-	r.revalidateInterval = cfg.RevalidateInterval.Nanoseconds()
 	r.maxStaleDuration = cfg.RefreshDurationThreshold.Nanoseconds()
+
+	if data.statusCode != http.StatusOK {
+		// stale response TTL on error (at now it calculates)
+		r.revalidateInterval = cfg.RevalidateInterval.Nanoseconds() / 10
+	} else {
+		// proper TTL on success
+		r.revalidateInterval = cfg.RevalidateInterval.Nanoseconds()
+	}
+
 	return r
 }
 
