@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/Borislavv/traefik-http-cache-plugin/internal/cache/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/internal/cache/server"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/k8s/probe/liveness"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/repository"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/shutdown"
@@ -11,7 +12,6 @@ import (
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
 	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
 	"github.com/rs/zerolog/log"
-	"gitlab.xbet.lan/v3group/backend/packages/go/liveness-prober"
 )
 
 // App defines the cache application lifecycle interface.

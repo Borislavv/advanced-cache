@@ -1,10 +1,10 @@
 package api
 
 import (
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/k8s/probe/liveness"
 	"github.com/fasthttp/router"
 	"github.com/rs/zerolog/log"
 	"github.com/valyala/fasthttp"
-	"gitlab.xbet.lan/v3group/backend/packages/go/liveness-prober"
 )
 
 var (
