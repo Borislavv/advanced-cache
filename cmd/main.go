@@ -37,8 +37,8 @@ func init() {
 	_ = viper.BindEnv("FASTHTTP_SERVER_PORT")
 	_ = viper.BindEnv("FASTHTTP_SERVER_SHUTDOWN_TIMEOUT")
 	_ = viper.BindEnv("FASTHTTP_SERVER_REQUEST_TIMEOUT")
-	_ = viper.BindEnv("IS_PROMETHEUS_METRICS_ENABLED")
 	_ = viper.BindEnv("LIVENESS_PROBE_FAILED_TIMEOUT")
+	_ = viper.BindEnv("IS_PROMETHEUS_METRICS_ENABLED")
 }
 
 // setMaxProcs automatically sets the optimal GOMAXPROCS value (CPU parallelism)
