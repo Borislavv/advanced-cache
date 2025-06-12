@@ -42,13 +42,8 @@ func (s *Backend) Fetch(ctx context.Context, req *model.Request) (*model.Respons
 		return nil, errors.New("failed to request external backend: " + err.Error())
 	}
 
-	// Prepare a closure to allow future revalidation using the same logic/endpoint.
-	Revalidator := func(ctx context.Context) (*model.Data, error) {
-		return s.requestExternalBackend(ctx, req)
-	}
-
 	// Build a new response object, which contains the cache payload, request, config and revalidator.
-	resp, err := model.NewResponse(data, req, s.cfg, Revalidator)
+	resp, err := model.NewResponse(data, req, s.cfg, s.RevalidatorMaker(req))
 	if err != nil {
 		return nil, errors.New("failed to create response: " + err.Error())
 	}
@@ -56,6 +51,7 @@ func (s *Backend) Fetch(ctx context.Context, req *model.Request) (*model.Respons
 	return resp, nil
 }
 
+// RevalidatorMaker builds a new revalidator for model.Response by catching a request into closure for be able to call backend later.
 func (s *Backend) RevalidatorMaker(req *model.Request) func(ctx context.Context) (*model.Data, error) {
 	return func(ctx context.Context) (*model.Data, error) {
 		return s.requestExternalBackend(ctx, req)
