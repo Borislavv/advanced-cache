@@ -2,6 +2,7 @@ package timed
 
 import (
 	"context"
+	"fmt"
 	"github.com/Borislavv/traefik-http-cache-plugin/internal/cache/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/rate"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/list"
@@ -66,8 +67,8 @@ func (w *Wheel[T]) update(spoke timemodel.Spoke) {
 	if err := spoke.Revalidate(w.ctx); err != nil {
 		log.
 			Err(err).
-			Str("key", strconv.Itoa(int(spoke.Key()))).
-			Str("shardKey", strconv.Itoa(int(spoke.ShardKey()))).
+			Str("key", fmt.Sprintf("%v", spoke.Key())).
+			Str("shardKey", fmt.Sprintf("%v", spoke.ShardKey())).
 			Str("query", string(spoke.ToQuery())).
 			Msg("response update failed")
 		erroredNumCh <- struct{}{}

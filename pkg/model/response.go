@@ -127,19 +127,20 @@ type Response struct {
 	isDoomed int64 // "Doomed" flag for objects marked for delete but still referenced
 
 	beta               int64 // e.g. 0.7*100 = 70, parameter for probabilistic refresh
-	maxStaleDuration   int64 // How long to keep without refresh (nanoseconds)
+	minStaleDuration   int64 // How long to keep without any refresh (nanoseconds)
 	revalidateInterval int64 // Interval for background revalidation (nanoseconds)
 	revalidatedAt      int64 // Last revalidated time (nanoseconds since epoch)
 }
 
 // NewResponse constructs a new Response using memory pools and sets up all fields.
 func NewResponse(
-	data *Data,
-	req *Request,
-	cfg *config.Cache,
+	data *Data, req *Request, cfg *config.Cache,
 	revalidator func(ctx context.Context) (data *Data, err error),
 ) (*Response, error) {
-	return ResponsePool.Get().Init().clear().SetUp(cfg, data, req, revalidator), nil
+	return ResponsePool.Get().Init().clear().SetUp(
+		cfg.RevalidateBeta, cfg.RevalidateInterval,
+		cfg.RefreshDurationThreshold, data, req, revalidator,
+	), nil
 }
 
 // Init ensures all pointers are non-nil after pool Get.
@@ -157,22 +158,14 @@ func (r *Response) Init() *Response {
 }
 
 // SetUp stores the Data, Request, and config-driven fields into the Response.
-func (r *Response) SetUp(cfg *config.Cache, data *Data, req *Request, revalidator func(ctx context.Context) (data *Data, err error)) *Response {
+func (r *Response) SetUp(beta float64, interval, minStale time.Duration, data *Data, req *Request, revalidator func(ctx context.Context) (data *Data, err error)) *Response {
 	r.data.Store(data)
 	r.request.Store(req)
 	r.revalidator = revalidator
 	r.revalidatedAt = time.Now().UnixNano()
-	r.beta = int64(cfg.RevalidateBeta * 100)
-	r.maxStaleDuration = cfg.RefreshDurationThreshold.Nanoseconds()
-
-	if data.statusCode != http.StatusOK {
-		// stale response TTL on error (at now it calculates)
-		r.revalidateInterval = cfg.RevalidateInterval.Nanoseconds() / 10
-	} else {
-		// proper TTL on success
-		r.revalidateInterval = cfg.RevalidateInterval.Nanoseconds()
-	}
-
+	r.beta = int64(beta * 100)
+	r.revalidateInterval = interval.Nanoseconds()
+	r.minStaleDuration = minStale.Nanoseconds()
 	return r
 }
 
@@ -182,7 +175,7 @@ func (r *Response) clear() *Response {
 	r.refCount = 0
 	r.isDoomed = 0
 	r.revalidatedAt = 0
-	r.maxStaleDuration = 0
+	r.minStaleDuration = 0
 	r.revalidateInterval = 0
 	r.beta = 0
 	r.lruListElem.Store(nil)
@@ -254,10 +247,24 @@ func (r *Response) ShouldRefresh() bool {
 	if atomic.LoadInt64(&r.isDoomed) == 1 {
 		return false
 	}
-	age := time.Since(time.Unix(0, atomic.LoadInt64(&r.revalidatedAt))).Nanoseconds()
-	if age > r.maxStaleDuration {
-		return rand.Float64() >= math.Exp((float64(-r.beta)/100)*float64(age)/float64(r.revalidateInterval))
+
+	var (
+		beta             = atomic.LoadInt64(&r.beta)
+		interval         = atomic.LoadInt64(&r.revalidateInterval)
+		revalidatedAt    = atomic.LoadInt64(&r.revalidatedAt)
+		minStaleDuration = atomic.LoadInt64(&r.minStaleDuration)
+	)
+
+	if r.data.Load().statusCode != http.StatusOK {
+		interval = interval / 10                 // On stale will be used 10% of origin interval.
+		minStaleDuration = minStaleDuration / 10 // On stale will be used 10% of origin stale duration.
 	}
+
+	// hard check that min
+	if age := time.Since(time.Unix(0, revalidatedAt)).Nanoseconds(); age > minStaleDuration {
+		return rand.Float64() >= math.Exp((float64(-beta)/100)*float64(age)/float64(interval))
+	}
+
 	return false
 }
 
@@ -267,8 +274,10 @@ func (r *Response) Revalidate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
 	r.data.Store(data)
 	atomic.StoreInt64(&r.revalidatedAt, time.Now().UnixNano())
+
 	return nil
 }
 
@@ -414,8 +423,8 @@ func (r *Response) MarshalBinary() ([]byte, error) {
 	}
 
 	// ---- Meta ----
-	// beta, maxStaleDuration, revalidateInterval, revalidatedAt
-	meta := []int64{r.beta, r.maxStaleDuration, r.revalidateInterval, r.revalidatedAt}
+	// beta, minStaleDuration, revalidateInterval, revalidatedAt
+	meta := []int64{r.beta, r.minStaleDuration, r.revalidateInterval, r.revalidatedAt}
 	for _, v := range meta {
 		if err := binary.Write(&buf, binary.LittleEndian, v); err != nil {
 			return nil, err
@@ -475,7 +484,7 @@ func (r *Response) UnmarshalBinary(data []byte, revalidatorMaker func(req *Reque
 	}
 
 	var tagsCount uint8
-	if err := binary.Read(buf, binary.LittleEndian, &tagsCount); err != nil {
+	if err = binary.Read(buf, binary.LittleEndian, &tagsCount); err != nil {
 		return err
 	}
 	tags := tagsSlicesPool.Get()
@@ -489,16 +498,16 @@ func (r *Response) UnmarshalBinary(data []byte, revalidatorMaker func(req *Reque
 	tags = tags[:tagsCount]
 
 	var key, shardKey uint64
-	if err := binary.Read(buf, binary.LittleEndian, &key); err != nil {
+	if err = binary.Read(buf, binary.LittleEndian, &key); err != nil {
 		return err
 	}
-	if err := binary.Read(buf, binary.LittleEndian, &shardKey); err != nil {
+	if err = binary.Read(buf, binary.LittleEndian, &shardKey); err != nil {
 		return err
 	}
 
 	// ---- Data ----
 	var statusCode int32
-	if err := binary.Read(buf, binary.LittleEndian, &statusCode); err != nil {
+	if err = binary.Read(buf, binary.LittleEndian, &statusCode); err != nil {
 		return err
 	}
 
@@ -515,15 +524,15 @@ func (r *Response) UnmarshalBinary(data []byte, revalidatorMaker func(req *Reque
 	// ---- Meta ----
 	meta := make([]int64, 4)
 	for i := range meta {
-		if err := binary.Read(buf, binary.LittleEndian, &meta[i]); err != nil {
+		if err = binary.Read(buf, binary.LittleEndian, &meta[i]); err != nil {
 			return err
 		}
 	}
 
 	// --- Make objects ---
 	// Data
-	d := dataPool.Get()
-	*d = Data{
+	dataObj := dataPool.Get()
+	*dataObj = Data{
 		statusCode: int(statusCode),
 		headers:    headers,
 		body:       body,
@@ -531,21 +540,19 @@ func (r *Response) UnmarshalBinary(data []byte, revalidatorMaker func(req *Reque
 	}
 
 	// Request
-	req := requestsPool.Get().clear().setUp(
+	reqObj := requestsPool.Get().clear().setUp(
 		project, domain, language, tags, func() { tagsSlicesPool.Put(tags) },
 	)
-	req.key = key
-	req.shardKey = shardKey
 
 	// Response
-	r.clear()
-	r.data.Store(d)
-	r.request.Store(req)
-	r.beta = meta[0]
-	r.maxStaleDuration = meta[1]
-	r.revalidateInterval = meta[2]
-	r.revalidatedAt = time.Now().UnixNano()
-	r.revalidator = revalidatorMaker(req)
+	r.clear().SetUp(
+		float64(meta[0])/100,   // beta
+		time.Duration(meta[2]), // revalidateInterval
+		time.Duration(meta[1]), // minStaleDuration
+		dataObj,
+		reqObj,
+		revalidatorMaker(reqObj),
+	)
 
 	return nil
 }

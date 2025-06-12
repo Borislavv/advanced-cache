@@ -2,6 +2,7 @@ package lru
 
 import (
 	"context"
+	"fmt"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/rate"
@@ -92,8 +93,8 @@ func (r *Refresh) update(resp *model.Response) {
 	if err := resp.Revalidate(r.ctx); err != nil {
 		log.
 			Err(err).
-			Str("key", strconv.Itoa(int(resp.Key()))).
-			Str("shardKey", strconv.Itoa(int(resp.ShardKey()))).
+			Str("key", fmt.Sprintf("%v", resp.Key())).
+			Str("shardKey", fmt.Sprintf("%v", resp.ShardKey())).
 			Str("query", string(resp.ToQuery())).
 			Msg("response update failed")
 
