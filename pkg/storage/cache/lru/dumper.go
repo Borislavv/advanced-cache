@@ -2,6 +2,7 @@ package lru
 
 import (
 	"bufio"
+	"compress/gzip"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -31,9 +32,13 @@ func (c *LRU) DumpToDir(ctx context.Context, dir string) error {
 	}
 	defer func() { _ = f.Close() }()
 
+	gz := gzip.NewWriter(f)
+	defer func() { _ = gz.Close() }()
+
+	bufWriter := bufio.NewWriterSize(gz, 8*1024*1024) // 8MB буфер
+
 	errors := 0
 	success := 0
-	bufWriter := bufio.NewWriterSize(f, 8*1024*1024) // 8MB buffer
 	for shardID, node := range c.balancer.Shards() {
 		node.shard.Walk(ctx, func(_ uint64, resp *model.Response) {
 			select {
@@ -73,6 +78,12 @@ func (c *LRU) DumpToDir(ctx context.Context, dir string) error {
 		return err
 	}
 
+	if err = gz.Close(); err != nil {
+		err = fmt.Errorf("flush gzip buffer failed: %w", err)
+		log.Err(err).Msg("[dump] " + err.Error())
+		return err
+	}
+
 	log.Info().Msgf(
 		"[dump] dump to: %s successfully written %d keys, errors %d (elapsed: %s)",
 		filename, success, errors, time.Since(from).String(),
@@ -96,9 +107,16 @@ func (c *LRU) LoadFromDir(ctx context.Context, dir string) error {
 	}
 	defer func() { _ = f.Close() }()
 
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return fmt.Errorf("make a gzip reader: %w", err)
+	}
+	defer func() { _ = gz.Close() }()
+
+	bufReader := bufio.NewReaderSize(gz, 8*1024*1024) // 8mb
+
 	errors := 0
 	success := 0
-	bufReader := bufio.NewReaderSize(f, 8*1024*1024) // 8MB buffer
 	for {
 		select {
 		case <-ctx.Done():
