@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/binary"
+	"errors"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/list"
 	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
-	timemodel "github.com/Borislavv/traefik-http-cache-plugin/pkg/time/model"
+	"io"
 	"math"
 	"math/rand/v2"
 	"net/http"
@@ -24,12 +26,11 @@ var (
 	dataPool = synced.NewBatchPool[*Data](synced.PreallocationBatchSize, func() *Data {
 		return new(Data)
 	})
-	responsePool = synced.NewBatchPool[*Response](synced.PreallocationBatchSize, func() *Response {
+	ResponsePool = synced.NewBatchPool[*Response](synced.PreallocationBatchSize, func() *Response {
 		return &Response{
-			data:          &atomic.Pointer[Data]{},
-			request:       &atomic.Pointer[Request]{},
-			lruListElem:   &atomic.Pointer[list.Element[*Response]]{},
-			timeWheelElem: &atomic.Pointer[list.Element[timemodel.Spoke]]{},
+			data:        &atomic.Pointer[Data]{},
+			request:     &atomic.Pointer[Request]{},
+			lruListElem: &atomic.Pointer[list.Element[*Response]]{},
 		}
 	})
 	gzipBufferPool = synced.NewBatchPool[*bytes.Buffer](synced.PreallocationBatchSize, func() *bytes.Buffer {
@@ -38,7 +39,7 @@ var (
 	gzipWriterPool = synced.NewBatchPool[*gzip.Writer](synced.PreallocationBatchSize, func() *gzip.Writer {
 		w, err := gzip.NewWriterLevel(nil, gzip.BestSpeed)
 		if err != nil {
-			panic("failed to init. gzip writer: " + err.Error())
+			panic("failed to Init. gzip writer: " + err.Error())
 		}
 		return w
 	})
@@ -116,10 +117,9 @@ func (d *Data) Release() {
 
 // Response is the main cache object, holding the request, payload, metadata, and list pointers.
 type Response struct {
-	request       *atomic.Pointer[Request]                       // Associated request
-	data          *atomic.Pointer[Data]                          // Cached data
-	lruListElem   *atomic.Pointer[list.Element[*Response]]       // Pointer for LRU list (per-shard)
-	timeWheelElem *atomic.Pointer[list.Element[timemodel.Spoke]] // Pointer for wheel/bucket-based background refresh
+	request     *atomic.Pointer[Request]                 // Associated request
+	data        *atomic.Pointer[Data]                    // Cached data
+	lruListElem *atomic.Pointer[list.Element[*Response]] // Pointer for LRU list (per-shard)
 
 	revalidator func(ctx context.Context) (data *Data, err error) // Closure for refresh/revalidation
 
@@ -139,11 +139,11 @@ func NewResponse(
 	cfg *config.Config,
 	revalidator func(ctx context.Context) (data *Data, err error),
 ) (*Response, error) {
-	return responsePool.Get().init().clear().setUp(cfg, data, req, revalidator), nil
+	return ResponsePool.Get().Init().clear().SetUp(cfg, data, req, revalidator), nil
 }
 
-// init ensures all pointers are non-nil after pool Get.
-func (r *Response) init() *Response {
+// Init ensures all pointers are non-nil after pool Get.
+func (r *Response) Init() *Response {
 	if r.request == nil {
 		r.request = &atomic.Pointer[Request]{}
 	}
@@ -156,8 +156,8 @@ func (r *Response) init() *Response {
 	return r
 }
 
-// setUp stores the Data, Request, and config-driven fields into the Response.
-func (r *Response) setUp(cfg *config.Config, data *Data, req *Request, revalidator func(ctx context.Context) (data *Data, err error)) *Response {
+// SetUp stores the Data, Request, and config-driven fields into the Response.
+func (r *Response) SetUp(cfg *config.Config, data *Data, req *Request, revalidator func(ctx context.Context) (data *Data, err error)) *Response {
 	r.data.Store(data)
 	r.request.Store(req)
 	r.revalidator = revalidator
@@ -177,7 +177,6 @@ func (r *Response) clear() *Response {
 	r.maxStaleDuration = 0
 	r.revalidateInterval = 0
 	r.beta = 0
-	r.timeWheelElem.Store(nil)
 	r.lruListElem.Store(nil)
 	r.request.Store(nil)
 	r.data.Store(nil)
@@ -185,6 +184,11 @@ func (r *Response) clear() *Response {
 }
 
 // --- Response API ---
+
+func (r *Response) Touch() *Response {
+	atomic.StoreInt64(&r.revalidatedAt, time.Now().UnixNano())
+	return r
+}
 
 // ToQuery returns the query representation of the request.
 func (r *Response) ToQuery() []byte {
@@ -280,16 +284,6 @@ func (r *Response) SetLruListElement(el *list.Element[*Response]) {
 	r.lruListElem.Store(el)
 }
 
-// WheelListElement returns the wheel list element pointer (for background refresh scheduling).
-func (r *Response) WheelListElement() *list.Element[timemodel.Spoke] {
-	return r.timeWheelElem.Load()
-}
-
-// StoreWheelListElement sets the wheel list element pointer.
-func (r *Response) StoreWheelListElement(elem *list.Element[timemodel.Spoke]) {
-	r.timeWheelElem.Store(elem)
-}
-
 // Data returns the underlying Data payload.
 func (r *Response) Data() *Data {
 	return r.data.Load()
@@ -356,6 +350,237 @@ func (r *Response) Release() bool {
 	r.data.Load().Release()
 	r.request.Load().Release()
 	r.clear()
-	responsePool.Put(r)
+	ResponsePool.Put(r)
 	return true
+}
+
+// MarshalBinary serializes Response+Request+Data into a length-prefixed binary format.
+// NO string/reflect, только "сырье"!
+func (r *Response) MarshalBinary() ([]byte, error) {
+	var buf bytes.Buffer
+
+	// ---- Request ----
+	req := r.Request()
+	if req == nil {
+		return nil, errors.New("nil request")
+	}
+	// Write project, domain, language
+	for _, field := range [][]byte{req.project, req.domain, req.language} {
+		if err := writeBytes(&buf, field); err != nil {
+			return nil, err
+		}
+	}
+	// Write tags count
+	if err := binary.Write(&buf, binary.LittleEndian, uint8(len(req.tags))); err != nil {
+		return nil, err
+	}
+	for _, tag := range req.tags {
+		if err := writeBytes(&buf, tag); err != nil {
+			return nil, err
+		}
+	}
+	// Write key, shardKey
+	if err := binary.Write(&buf, binary.LittleEndian, req.key); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(&buf, binary.LittleEndian, req.shardKey); err != nil {
+		return nil, err
+	}
+
+	// ---- Data ----
+	data := r.Data()
+	if data == nil {
+		return nil, errors.New("nil data")
+	}
+	// Status code
+	if err := binary.Write(&buf, binary.LittleEndian, int32(data.statusCode)); err != nil {
+		return nil, err
+	}
+	// Headers (map[string][]string)
+	if err := writeHeaders(&buf, data.headers); err != nil {
+		return nil, err
+	}
+	// Body
+	if err := writeBytes(&buf, data.body); err != nil {
+		return nil, err
+	}
+
+	// ---- Meta ----
+	// beta, maxStaleDuration, revalidateInterval, revalidatedAt
+	meta := []int64{r.beta, r.maxStaleDuration, r.revalidateInterval, r.revalidatedAt}
+	for _, v := range meta {
+		if err := binary.Write(&buf, binary.LittleEndian, v); err != nil {
+			return nil, err
+		}
+	}
+	return buf.Bytes(), nil
+}
+
+func writeBytes(w io.Writer, b []byte) error {
+	if err := binary.Write(w, binary.LittleEndian, uint32(len(b))); err != nil {
+		return err
+	}
+	if _, err := w.Write(b); err != nil {
+		return err
+	}
+	return nil
+}
+
+func writeHeaders(w io.Writer, hdr map[string][]string) error {
+	// Write headers count
+	if err := binary.Write(w, binary.LittleEndian, uint32(len(hdr))); err != nil {
+		return err
+	}
+	for k, vals := range hdr {
+		if err := writeBytes(w, []byte(k)); err != nil {
+			return err
+		}
+		// Write count of values
+		if err := binary.Write(w, binary.LittleEndian, uint32(len(vals))); err != nil {
+			return err
+		}
+		for _, v := range vals {
+			if err := writeBytes(w, []byte(v)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// UnmarshalBinary deserializes Response+Request+Data from length-prefixed binary format.
+func (r *Response) UnmarshalBinary(data []byte, revalidatorMaker func(req *Request) func(ctx context.Context) (*Data, error)) error {
+	buf := bytes.NewReader(data)
+
+	// ---- Request ----
+	project, err := readBytes(buf)
+	if err != nil {
+		return err
+	}
+	domain, err := readBytes(buf)
+	if err != nil {
+		return err
+	}
+	language, err := readBytes(buf)
+	if err != nil {
+		return err
+	}
+
+	var tagsCount uint8
+	if err := binary.Read(buf, binary.LittleEndian, &tagsCount); err != nil {
+		return err
+	}
+	tags := tagsSlicesPool.Get()
+	for i := 0; i < int(tagsCount); i++ {
+		tag, err := readBytes(buf)
+		if err != nil {
+			return err
+		}
+		tags[i] = internSlice(tag)
+	}
+	tags = tags[:tagsCount]
+
+	var key, shardKey uint64
+	if err := binary.Read(buf, binary.LittleEndian, &key); err != nil {
+		return err
+	}
+	if err := binary.Read(buf, binary.LittleEndian, &shardKey); err != nil {
+		return err
+	}
+
+	// ---- Data ----
+	var statusCode int32
+	if err := binary.Read(buf, binary.LittleEndian, &statusCode); err != nil {
+		return err
+	}
+
+	headers, err := readHeaders(buf)
+	if err != nil {
+		return err
+	}
+
+	body, err := readBytes(buf)
+	if err != nil {
+		return err
+	}
+
+	// ---- Meta ----
+	meta := make([]int64, 4)
+	for i := range meta {
+		if err := binary.Read(buf, binary.LittleEndian, &meta[i]); err != nil {
+			return err
+		}
+	}
+
+	// --- Make objects ---
+	// Data
+	d := dataPool.Get()
+	*d = Data{
+		statusCode: int(statusCode),
+		headers:    headers,
+		body:       body,
+		releaseFn:  func() {}, // no release
+	}
+
+	// Request
+	req := requestsPool.Get().clear().setUp(
+		project, domain, language, tags, func() { tagsSlicesPool.Put(tags) },
+	)
+	req.key = key
+	req.shardKey = shardKey
+
+	// Response
+	r.clear()
+	r.data.Store(d)
+	r.request.Store(req)
+	r.beta = meta[0]
+	r.maxStaleDuration = meta[1]
+	r.revalidateInterval = meta[2]
+	r.revalidatedAt = time.Now().UnixNano()
+	r.revalidator = revalidatorMaker(req)
+
+	return nil
+}
+
+// readBytes reads []byte in format [len:uint32][data...]
+func readBytes(r io.Reader) ([]byte, error) {
+	var l uint32
+	if err := binary.Read(r, binary.LittleEndian, &l); err != nil {
+		return nil, err
+	}
+	if l == 0 {
+		return nil, nil
+	}
+	b := make([]byte, l)
+	if _, err := io.ReadFull(r, b); err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+// readHeaders reads map[string][]string from binary format.
+func readHeaders(r io.Reader) (http.Header, error) {
+	var count uint32
+	if err := binary.Read(r, binary.LittleEndian, &count); err != nil {
+		return nil, err
+	}
+	hdr := make(http.Header, int(count))
+	for i := 0; i < int(count); i++ {
+		k, err := readBytes(r)
+		if err != nil {
+			return nil, err
+		}
+		var valsCount uint32
+		if err := binary.Read(r, binary.LittleEndian, &valsCount); err != nil {
+			return nil, err
+		}
+		for j := 0; j < int(valsCount); j++ {
+			v, err := readBytes(r)
+			if err != nil {
+				return nil, err
+			}
+			hdr.Add(string(k), string(v))
+		}
+	}
+	return hdr, nil
 }
