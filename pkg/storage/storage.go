@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/repository"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/cache"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/cache/lru"
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
@@ -22,6 +23,9 @@ type Storage interface {
 
 	// Set stores a new response in the cache and returns a releaser for managing resource lifetime.
 	Set(resp *model.Response) (releaser *sharded.Releaser[*model.Response])
+
+	// Stop dumps itself in FS.
+	Stop()
 }
 
 // AlgoStorage is a wrapper that delegates actual storage logic to an underlying algorithm implementation.
@@ -40,15 +44,16 @@ type AlgoStorage struct {
 func New(
 	ctx context.Context,
 	cfg *config.Config,
+	backend repository.Backender,
 	shardedMap *sharded.Map[*model.Response],
-) *AlgoStorage {
+) (db *AlgoStorage) {
 	var s Storage
 
 	// Select and initialize storage backend by eviction algorithm type.
 	switch cache.Algorithm(cfg.EvictionAlgo) {
 	case cache.LRU:
 		// Least Recently Used (LRU) cache
-		s = lru.NewLRU(ctx, cfg, shardedMap)
+		s = lru.NewLRU(ctx, cfg, backend, shardedMap)
 	default:
 		// Panic for unsupported/unknown algorithms.
 		panic("algorithm " + cfg.EvictionAlgo + " is not implemented yet")
