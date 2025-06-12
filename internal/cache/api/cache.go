@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-// Path for getting pagedata from cache via HTTP.
+// CacheGetPath for getting pagedata from cache via HTTP.
 const CacheGetPath = "/api/v1/cache/pagedata"
 
 // Predefined HTTP response templates for error handling (400/503)
@@ -76,16 +76,12 @@ func NewCacheController(
 }
 
 // Index is the main HTTP handler for /api/v1/cache/pagedata.
-// Handles both cache hit and miss, fallbacks to upstream if needed.
 func (c *CacheController) Index(r *fasthttp.RequestCtx) {
 	f := time.Now()
 
 	// Extract application context from request, fallback to base context.
-	ctx, err := util.ExtractCtx(r)
-	if err != nil {
-		ctx = c.ctx
-		log.Warn().Msg(err.Error())
-	}
+	ctx, cancel := context.WithCancel(c.ctx)
+	defer cancel()
 
 	// Parse request parameters.
 	req, err := model.NewRequest(r.QueryArgs())
