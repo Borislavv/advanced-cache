@@ -6,6 +6,9 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/internal/cache/api"
 	"github.com/Borislavv/traefik-http-cache-plugin/internal/cache/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/k8s/probe/liveness"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/prometheus/metrics"
+	controller2 "github.com/Borislavv/traefik-http-cache-plugin/pkg/prometheus/metrics/controller"
+	middleware2 "github.com/Borislavv/traefik-http-cache-plugin/pkg/prometheus/metrics/middleware"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/repository"
 	httpserver "github.com/Borislavv/traefik-http-cache-plugin/pkg/server"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/server/controller"
@@ -13,9 +16,6 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage"
 	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
 	"github.com/rs/zerolog/log"
-	"gitlab.xbet.lan/v3group/backend/packages/go/metrics"
-	api2 "gitlab.xbet.lan/v3group/backend/packages/go/metrics/controller"
-	prometheusrequestmiddleware "gitlab.xbet.lan/v3group/backend/packages/go/metrics/middleware"
 	"sync"
 	"sync/atomic"
 )
@@ -177,7 +177,7 @@ func (s *HttpServer) controllers(
 	return []controller.HttpController{
 		api.NewLivenessController(probe),                             // Liveness/healthcheck endpoint
 		api.NewCacheController(s.ctx, s.cfg, cache, seoRepo, reader), // Main cache handler
-		api2.NewPrometheusMetrics(s.ctx),                             // Prometheus metrics endpoint
+		controller2.NewPrometheusMetrics(s.ctx),                      // Prometheus metrics endpoint
 	}
 }
 
@@ -186,6 +186,6 @@ func (s *HttpServer) middlewares() []middleware.HttpMiddleware {
 	return []middleware.HttpMiddleware{
 		/** exec 1st. */ middleware.NewApplicationJsonMiddleware(), // Sets Content-Type
 		/** exec 2nd. */ middleware.NewWatermarkMiddleware(s.ctx, s.cfg), // Adds watermark info
-		/** exec 3rd. */ prometheusrequestmiddleware.NewPrometheusMetrics(s.ctx, s.metrics), // Prometheus instrumentation
+		/** exec 3rd. */ middleware2.NewPrometheusMetrics(s.ctx, s.metrics), // Prometheus instrumentation
 	}
 }

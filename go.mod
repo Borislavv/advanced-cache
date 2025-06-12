@@ -10,7 +10,6 @@ require (
 	github.com/valyala/fasthttp v1.59.0
 	github.com/zeebo/xxh3 v1.0.2
 	gitlab.xbet.lan/v3group/backend/packages/go/locales-and-languages v1.0.0
-	gitlab.xbet.lan/v3group/backend/packages/go/metrics v1.1.0
 	go.uber.org/automaxprocs v1.6.0
 )
 
