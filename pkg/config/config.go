@@ -9,9 +9,9 @@ const (
 	EnvTest = "test"
 )
 
-// Config is the main application configuration struct.
+// Cache is the main application configuration struct.
 // All fields are loaded via mapstructure for compatibility with envconfig/viper/unmarshalers.
-type Config struct {
+type Cache struct {
 	AppEnv   string `mapstructure:"APP_ENV"`   // Application environment: "prod", "dev", or "test"
 	AppDebug bool   `mapstructure:"APP_DEBUG"` // Enable debug logging and features
 	SeoUrl   string `mapstructure:"SEO_URL"`   // Upstream SEO service base URL
@@ -45,21 +45,21 @@ type Config struct {
 }
 
 // IsProdEnv returns true if the app is running in production mode.
-func (c *Config) IsProdEnv() bool {
+func (c *Cache) IsProdEnv() bool {
 	return c.AppEnv == EnvProd
 }
 
 // IsDevEnv returns true if the app is running in development mode.
-func (c *Config) IsDevEnv() bool {
+func (c *Cache) IsDevEnv() bool {
 	return c.AppEnv == EnvDev
 }
 
 // IsTestEnv returns true if the app is running in test mode.
-func (c *Config) IsTestEnv() bool {
+func (c *Cache) IsTestEnv() bool {
 	return c.AppEnv == EnvTest
 }
 
 // IsDebugOn returns true if debug mode is enabled.
-func (c *Config) IsDebugOn() bool {
+func (c *Cache) IsDebugOn() bool {
 	return c.AppDebug
 }
