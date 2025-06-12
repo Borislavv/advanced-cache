@@ -46,11 +46,11 @@ func (s *HTTP) serve(wg *sync.WaitGroup) {
 	name := s.config.GetHttpServerName()
 	port := s.config.GetHttpServerPort()
 
-	log.Info().Msgf("%v http server was started (port: %v)", name, port)
-	defer log.Info().Msgf("%v http server was stopped (port: %v)", name, port)
+	log.Info().Msgf("[fasthttp] %v was started (port: %v)", name, port)
+	defer log.Info().Msgf("[fasthttp] %v was stopped (port: %v)", name, port)
 
 	if err := s.server.ListenAndServe(port); err != nil {
-		log.Err(err).Msgf("%v http server: failed to listen and serve port %v: %v", name, port, err.Error())
+		log.Err(err).Msgf("[fasthttp] %v failed to listen and serve port %v: %v", name, port, err.Error())
 	}
 }
 
@@ -64,7 +64,7 @@ func (s *HTTP) shutdown(wg *sync.WaitGroup) {
 
 	if err := s.server.ShutdownWithContext(ctx); err != nil {
 		if !errors.Is(err, context.Canceled) {
-			log.Warn().Msgf("%v http server: shutdown failed: %v", s.config.GetHttpServerName(), err.Error())
+			log.Warn().Msgf("[fasthttp] %v shutdown failed: %v", s.config.GetHttpServerName(), err.Error())
 		}
 		return
 	}

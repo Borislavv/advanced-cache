@@ -22,7 +22,7 @@ func BenchmarkReadFromStorage1000TimesPerIter(b *testing.B) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	cfg := &config.Config{
+	cfg := &config.Cache{
 		SeoUrl:                    "",
 		RevalidateBeta:            0.3,
 		RevalidateInterval:        time.Hour,
@@ -101,7 +101,7 @@ func BenchmarkWriteIntoStorage1000TimesPerIter(b *testing.B) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	cfg := &config.Config{
+	cfg := &config.Cache{
 		SeoUrl:                    "",
 		RevalidateBeta:            0.3,
 		RevalidateInterval:        time.Hour,
@@ -176,7 +176,7 @@ func BenchmarkGetAllocs(b *testing.B) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	cfg := &config.Config{
+	cfg := &config.Cache{
 		RevalidateBeta:            0.3,
 		RevalidateInterval:        time.Hour,
 		InitStorageLengthPerShard: 256,
@@ -202,7 +202,7 @@ func BenchmarkSetAllocs(b *testing.B) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	cfg := &config.Config{
+	cfg := &config.Cache{
 		RevalidateBeta:            0.3,
 		RevalidateInterval:        time.Hour,
 		InitStorageLengthPerShard: 256,

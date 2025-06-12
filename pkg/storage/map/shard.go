@@ -61,7 +61,7 @@ func NewShard[V Value](id uint64, defaultLen int) *Shard[V] {
 	return &Shard[V]{
 		RWMutex: &sync.RWMutex{},
 		items:   make(map[uint64]V, defaultLen),
-		releaserPool: synced.NewBatchPool[*Releaser[V]](synced.PreallocationBatchSize, func() *Releaser[V] {
+		releaserPool: synced.NewBatchPool[*Releaser[V]](synced.PreallocateBatchSize, func() *Releaser[V] {
 			return new(Releaser[V])
 		}),
 		id:  id,

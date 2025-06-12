@@ -17,8 +17,8 @@ import (
 const numOfRefreshesPerSec = 10
 
 var (
-	refreshedNumCh = make(chan struct{}, synced.PreallocationBatchSize)
-	erroredNumCh   = make(chan struct{}, synced.PreallocationBatchSize)
+	refreshedNumCh = make(chan struct{}, synced.PreallocateBatchSize)
+	erroredNumCh   = make(chan struct{}, synced.PreallocateBatchSize)
 )
 
 type Wheel[T timemodel.Spoke] struct {

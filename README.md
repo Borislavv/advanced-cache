@@ -75,9 +75,9 @@ These constants define the scaling, memory, and performance profile of the servi
   - **Current value:** `4096`
   - **Recommendation:** Bump to `8192` or `16384` if you expect huge keyspace; optimal is 2K–20K items per shard.
 
-2. **`synced.PreallocationBatchSize`**  
+2. **`synced.PreallocateBatchSize`**  
    Each `sync.Pool` (via `synced.BatchPool`) preallocates this many items on creator func call.
-  - **Current value:** `1000`
+  - **Current value:** `1024`
   - **Warning:** On startup, total preallocated objects = `PreallocationBatchSize * 10`. Don’t set too high unless you have a ton of RAM.
 
 3. **`lru.evictItemsPerIter`**  

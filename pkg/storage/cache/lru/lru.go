@@ -19,7 +19,7 @@ const dumpDir = "public/dump"
 
 var (
 	maxEvictors    = 4 // Number of concurrent evictor goroutines
-	evictionStatCh = make(chan evictionStat, maxEvictors*synced.PreallocationBatchSize)
+	evictionStatCh = make(chan evictionStat, maxEvictors*synced.PreallocateBatchSize)
 )
 
 // evictionStat carries statistics for each eviction batch.
@@ -31,7 +31,7 @@ type evictionStat struct {
 // LRU is a Memory-aware, sharded LRU cache with background eviction and refresh support.
 type LRU struct {
 	ctx             context.Context               // Main context for lifecycle control
-	cfg             *config.Config                // Cache configuration
+	cfg             *config.Cache                 // Cache configuration
 	shardedMap      *sharded.Map[*model.Response] // Sharded storage for cache entries
 	refresher       Refresher                     // Background refresher (see refresher.go)
 	balancer        Balancer                      // Helps pick shards to evict from
@@ -44,7 +44,7 @@ type LRU struct {
 // NewLRU constructs a new LRU cache instance and launches eviction and refresh routines.
 func NewLRU(
 	ctx context.Context,
-	cfg *config.Config,
+	cfg *config.Cache,
 	balancer Balancer,
 	refresher Refresher,
 	backend repository.Backender,

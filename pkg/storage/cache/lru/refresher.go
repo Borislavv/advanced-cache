@@ -19,8 +19,8 @@ const (
 )
 
 var (
-	refreshSuccessNumCh = make(chan struct{}, synced.PreallocationBatchSize) // Successful refreshes counter channel
-	refreshErroredNumCh = make(chan struct{}, synced.PreallocationBatchSize) // Failed refreshes counter channel
+	refreshSuccessNumCh = make(chan struct{}, synced.PreallocateBatchSize) // Successful refreshes counter channel
+	refreshErroredNumCh = make(chan struct{}, synced.PreallocateBatchSize) // Failed refreshes counter channel
 )
 
 type Refresher interface {
@@ -32,7 +32,7 @@ type Refresher interface {
 // (from the end of each shard's LRU list) to refresh if necessary.
 type Refresh struct {
 	ctx             context.Context
-	cfg             *config.Config
+	cfg             *config.Cache
 	balancer        *Balance
 	shardsSamplesCh chan *ShardNode
 	refreshRespCh   chan *model.Response
@@ -40,7 +40,7 @@ type Refresh struct {
 }
 
 // NewRefresher constructs a Refresh.
-func NewRefresher(ctx context.Context, cfg *config.Config, balancer *Balance) *Refresh {
+func NewRefresher(ctx context.Context, cfg *config.Cache, balancer *Balance) *Refresh {
 	return &Refresh{
 		ctx:             ctx,
 		cfg:             cfg,

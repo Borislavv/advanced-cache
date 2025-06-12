@@ -42,7 +42,7 @@ func New[T any](isMustBeListAThreadSafe bool) *List[T] {
 	l := &List[T]{
 		mu:        &sync.Mutex{},
 		isGuarded: isMustBeListAThreadSafe,
-		elemPool: synced.NewBatchPool[*Element[T]](synced.PreallocationBatchSize, func() *Element[T] {
+		elemPool: synced.NewBatchPool[*Element[T]](synced.PreallocateBatchSize, func() *Element[T] {
 			return &Element[T]{}
 		}),
 	}

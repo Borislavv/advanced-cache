@@ -43,7 +43,7 @@ type AlgoStorage struct {
 //	shardedMap  - shared sharded map storage for concurrent key/value access
 func New(
 	ctx context.Context,
-	cfg *config.Config,
+	cfg *config.Cache,
 	balancer lru.Balancer,
 	refresher lru.Refresher,
 	backend repository.Backender,
