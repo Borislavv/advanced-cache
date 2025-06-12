@@ -21,12 +21,12 @@ type Backender interface {
 // Backend implements the Backender interface.
 // It fetches and constructs SEO page data responses from an external backend.
 type Backend struct {
-	cfg    *config.Config      // Global configuration (SEO backend URL, etc)
+	cfg    *config.Cache       // Global configuration (SEO backend URL, etc)
 	reader synced.PooledReader // Efficient reader for HTTP responses
 }
 
 // NewBackend creates a new instance of Backend.
-func NewBackend(cfg *config.Config, reader synced.PooledReader) *Backend {
+func NewBackend(cfg *config.Cache, reader synced.PooledReader) *Backend {
 	return &Backend{
 		cfg:    cfg,
 		reader: reader,
