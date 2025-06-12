@@ -10,46 +10,62 @@ import (
 	"unsafe"
 )
 
-// shardNode represents a single shard's LRU and accounting info.
+// ShardNode represents a single shard's LRU and accounting info.
 // Each shard has its own LRU list and a pointer to its element in the balancer's memList.
-type shardNode struct {
+type ShardNode struct {
 	lruList     *list.List[*model.Response]     // Per-shard LRU list; less used responses at the back
-	memListElem *list.Element[*shardNode]       // Pointer to this node's position in Balancer.memList
+	memListElem *list.Element[*ShardNode]       // Pointer to this node's position in Balance.memList
 	shard       *sharded.Shard[*model.Response] // Reference to the actual shard (map + sync)
 	len         int64                           // Number of items in the shard (atomically updated)
 }
 
-// memory returns an approximate memory usage of this shardNode structure.
-func (s *shardNode) memory() uintptr {
+// memory returns an approximate memory usage of this ShardNode structure.
+func (s *ShardNode) memory() uintptr {
 	return unsafe.Sizeof(s) + uintptr(atomic.LoadInt64(&s.len)*consts.PtrBytesWeight)
 }
 
-// Balancer maintains per-shard LRU lists and provides efficient selection of loaded shards for eviction.
+type Balancer interface {
+	Shards() [sharded.ShardCount]*ShardNode
+	RandShardNode() *ShardNode
+	Register(shard *sharded.Shard[*model.Response])
+	Set(resp *model.Response) *ShardNode
+	Rebalance(n *ShardNode)
+	Move(shardKey uint64, el *list.Element[*model.Response])
+	Remove(key uint64, shardKey uint64) (freedMem uintptr, isHit bool)
+	MostLoaded(offset int) (*ShardNode, bool)
+	Memory() uintptr
+}
+
+// Balance maintains per-shard LRU lists and provides efficient selection of loaded shards for eviction.
 // - memList orders shardNodes by usage (most loaded in front).
 // - shards is a flat array for O(1) access by shard index.
 // - shardedMap is the underlying data storage (map of all entries).
-type Balancer struct {
-	shards     [sharded.ShardCount]*shardNode // Shard index → *shardNode
-	memList    *list.List[*shardNode]         // Doubly-linked list of shards, ordered by memory usage (most loaded at front)
+type Balance struct {
+	shards     [sharded.ShardCount]*ShardNode // Shard index → *ShardNode
+	memList    *list.List[*ShardNode]         // Doubly-linked list of shards, ordered by Memory usage (most loaded at front)
 	shardedMap *sharded.Map[*model.Response]  // Actual underlying storage of entries
 }
 
-// NewBalancer creates a new Balancer instance and initializes memList.
-func NewBalancer(shardedMap *sharded.Map[*model.Response]) *Balancer {
-	return &Balancer{
-		memList:    list.New[*shardNode](true), // Sorted mode for easier rebalancing
+// NewBalancer creates a new Balance instance and initializes memList.
+func NewBalancer(shardedMap *sharded.Map[*model.Response]) *Balance {
+	return &Balance{
+		memList:    list.New[*ShardNode](true), // Sorted mode for easier rebalancing
 		shardedMap: shardedMap,
 	}
 }
 
-// randShardNode returns a random shardNode for sampling (e.g., for background refreshers).
-func (b *Balancer) randShardNode() *shardNode {
+func (b *Balance) Shards() [sharded.ShardCount]*ShardNode {
+	return b.shards
+}
+
+// RandShardNode returns a random ShardNode for sampling (e.g., for background refreshers).
+func (b *Balance) RandShardNode() *ShardNode {
 	return b.shards[rand.Uint64N(sharded.ShardCount)]
 }
 
-// register inserts a new shardNode for a given shard, creates its LRU, and adds it to memList and shards array.
-func (b *Balancer) register(shard *sharded.Shard[*model.Response]) {
-	n := &shardNode{
+// Register inserts a new ShardNode for a given shard, creates its LRU, and adds it to memList and shards array.
+func (b *Balance) Register(shard *sharded.Shard[*model.Response]) {
+	n := &ShardNode{
 		shard:   shard,
 		lruList: list.New[*model.Response](true),
 	}
@@ -57,18 +73,18 @@ func (b *Balancer) register(shard *sharded.Shard[*model.Response]) {
 	b.shards[shard.ID()] = n
 }
 
-// set inserts a response into the appropriate shard's LRU list and updates counters.
-// Returns the affected shardNode for further operations.
-func (b *Balancer) set(resp *model.Response) *shardNode {
+// Set inserts a response into the appropriate shard's LRU list and updates counters.
+// Returns the affected ShardNode for further operations.
+func (b *Balance) Set(resp *model.Response) *ShardNode {
 	node := b.shards[resp.Request().ShardKey()]
 	atomic.AddInt64(&node.len, 1)
 	resp.SetLruListElement(node.lruList.PushFront(resp))
 	return node
 }
 
-// rebalance maintains the order of memList so that more loaded shards are kept in the front.
-// Moves the given shardNode forward until its position is correct.
-func (b *Balancer) rebalance(n *shardNode) {
+// Rebalance maintains the order of memList so that more loaded shards are kept in the front.
+// Moves the given ShardNode forward until its position is correct.
+func (b *Balance) Rebalance(n *ShardNode) {
 	curr := n.memListElem
 	if curr == nil {
 		return
@@ -81,16 +97,16 @@ func (b *Balancer) rebalance(n *shardNode) {
 	}
 }
 
-// move moves an element to the front of the per-shard LRU list.
-// Used for touch/set operations to mark entries as most recently used.
-func (b *Balancer) move(shardKey uint64, el *list.Element[*model.Response]) {
+// Move moves an element to the front of the per-shard LRU list.
+// Used for touch/Set operations to mark entries as most recently used.
+func (b *Balance) Move(shardKey uint64, el *list.Element[*model.Response]) {
 	b.shards[shardKey].lruList.MoveToFront(el)
 }
 
-// remove releases an entry from the shardedMap and removes it from the per-shard LRU list.
+// Remove releases an entry from the shardedMap and removes it from the per-shard LRU list.
 // Also updates counters and rebalances memList if necessary.
 // Returns (memory_freed, was_found).
-func (b *Balancer) remove(key uint64, shardKey uint64) (freedMem uintptr, isHit bool) {
+func (b *Balance) Remove(key uint64, shardKey uint64) (freedMem uintptr, isHit bool) {
 	freed, listElem, isHit := b.shardedMap.Release(key)
 	if !isHit {
 		return 0, false
@@ -99,14 +115,14 @@ func (b *Balancer) remove(key uint64, shardKey uint64) (freedMem uintptr, isHit 
 	node := b.shards[shardKey]
 	node.lruList.Remove(listElem.(*list.Element[*model.Response]))
 	atomic.AddInt64(&node.len, -1)
-	b.rebalance(node)
+	b.Rebalance(node)
 
 	return freed, true
 }
 
-// mostLoaded returns the first non-empty shard node from the front of memList,
+// MostLoaded returns the first non-empty shard node from the front of memList,
 // optionally skipping a number of nodes by offset (for concurrent eviction fairness).
-func (b *Balancer) mostLoaded(offset int) (*shardNode, bool) {
+func (b *Balance) MostLoaded(offset int) (*ShardNode, bool) {
 	for cur := b.memList.Front(); cur != nil; cur = cur.Next() {
 		if offset > 0 {
 			offset--
@@ -119,8 +135,8 @@ func (b *Balancer) mostLoaded(offset int) (*shardNode, bool) {
 	return nil, false
 }
 
-// memory returns an approximate total memory usage of all shards and the balancer itself.
-func (b *Balancer) memory() uintptr {
+// Memory returns an approximate total Memory usage of all shards and the balancer itself.
+func (b *Balance) Memory() uintptr {
 	mem := unsafe.Sizeof(b) + uintptr(sharded.ShardCount*consts.PtrBytesWeight)
 	for _, shard := range b.shards {
 		mem += shard.memory()

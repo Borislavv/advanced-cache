@@ -44,6 +44,8 @@ type AlgoStorage struct {
 func New(
 	ctx context.Context,
 	cfg *config.Config,
+	balancer lru.Balancer,
+	refresher lru.Refresher,
 	backend repository.Backender,
 	shardedMap *sharded.Map[*model.Response],
 ) (db *AlgoStorage) {
@@ -53,7 +55,7 @@ func New(
 	switch cache.Algorithm(cfg.EvictionAlgo) {
 	case cache.LRU:
 		// Least Recently Used (LRU) cache
-		s = lru.NewLRU(ctx, cfg, backend, shardedMap)
+		s = lru.NewLRU(ctx, cfg, balancer, refresher, backend, shardedMap)
 	default:
 		// Panic for unsupported/unknown algorithms.
 		panic("algorithm " + cfg.EvictionAlgo + " is not implemented yet")

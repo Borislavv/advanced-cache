@@ -34,7 +34,7 @@ func (c *LRU) DumpToDir(ctx context.Context, dir string) error {
 	errors := 0
 	success := 0
 	bufWriter := bufio.NewWriterSize(f, 8*1024*1024) // 8MB buffer
-	for shardID, node := range c.balancer.shards {
+	for shardID, node := range c.balancer.Shards() {
 		node.shard.Walk(ctx, func(_ uint64, resp *model.Response) {
 			select {
 			case <-ctx.Done():

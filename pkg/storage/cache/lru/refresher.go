@@ -23,25 +23,29 @@ var (
 	refreshErroredNumCh = make(chan struct{}, synced.PreallocationBatchSize) // Failed refreshes counter channel
 )
 
-// Refresher is responsible for background refreshing of cache entries.
+type Refresher interface {
+	RunRefresher()
+}
+
+// Refresh is responsible for background refreshing of cache entries.
 // It periodically samples random shards and randomly selects "cold" entries
 // (from the end of each shard's LRU list) to refresh if necessary.
-type Refresher struct {
+type Refresh struct {
 	ctx             context.Context
 	cfg             *config.Config
-	balancer        *Balancer
-	shardsSamplesCh chan *shardNode
+	balancer        *Balance
+	shardsSamplesCh chan *ShardNode
 	refreshRespCh   chan *model.Response
 	rate            rate.Limiter
 }
 
-// NewRefresher constructs a Refresher.
-func NewRefresher(ctx context.Context, cfg *config.Config, balancer *Balancer) *Refresher {
-	return &Refresher{
+// NewRefresher constructs a Refresh.
+func NewRefresher(ctx context.Context, cfg *config.Config, balancer *Balance) *Refresh {
+	return &Refresh{
 		ctx:             ctx,
 		cfg:             cfg,
 		balancer:        balancer,
-		shardsSamplesCh: make(chan *shardNode),
+		shardsSamplesCh: make(chan *ShardNode),
 		refreshRespCh:   make(chan *model.Response, rateLimit),
 		rate:            rate.NewLimiter(ctx, rateLimit, 0),
 	}
@@ -50,7 +54,7 @@ func NewRefresher(ctx context.Context, cfg *config.Config, balancer *Balancer) *
 // RunRefresher starts the refresher background loop.
 // It runs a logger (if debugging is enabled), spawns a provider for sampling shards,
 // and continuously processes shard samples for candidate responses to refresh.
-func (r *Refresher) RunRefresher() {
+func (r *Refresh) RunRefresher() {
 	go func() {
 		if r.cfg.IsDebugOn() {
 			r.runLogger()
@@ -64,7 +68,7 @@ func (r *Refresher) RunRefresher() {
 
 // spawnShardsSamplesProvider continuously pushes random shard nodes into shardsSamplesCh for processing.
 // The channel is closed on shutdown.
-func (r *Refresher) spawnShardsSamplesProvider() {
+func (r *Refresh) spawnShardsSamplesProvider() {
 	go func() {
 		defer close(r.shardsSamplesCh)
 		for {
@@ -75,7 +79,7 @@ func (r *Refresher) spawnShardsSamplesProvider() {
 				select {
 				case <-r.ctx.Done():
 					return
-				case r.shardsSamplesCh <- r.balancer.randShardNode():
+				case r.shardsSamplesCh <- r.balancer.RandShardNode():
 				}
 			}
 		}
@@ -84,7 +88,7 @@ func (r *Refresher) spawnShardsSamplesProvider() {
 
 // update attempts to refresh the given response via Revalidate.
 // If successful, increments the refresh metric (in debug mode); otherwise increments the error metric.
-func (r *Refresher) update(resp *model.Response) {
+func (r *Refresh) update(resp *model.Response) {
 	if err := resp.Revalidate(r.ctx); err != nil {
 		log.
 			Err(err).
@@ -112,7 +116,7 @@ func (r *Refresher) update(resp *model.Response) {
 
 // provideRespRefreshSignal selects up to refreshSamples entries from the end of the given shard's LRU list.
 // For each candidate, if ShouldRefresh() returns true and rate limiting allows, triggers an asynchronous refresh.
-func (r *Refresher) provideRespRefreshSignal(node *shardNode) {
+func (r *Refresh) provideRespRefreshSignal(node *ShardNode) {
 	lru := node.lruList
 	length := lru.Len()
 	if length == 0 {
@@ -150,7 +154,7 @@ func (r *Refresher) provideRespRefreshSignal(node *shardNode) {
 
 // runLogger periodically logs the number of successful and failed refresh attempts.
 // This runs only if debugging is enabled in the config.
-func (r *Refresher) runLogger() {
+func (r *Refresh) runLogger() {
 	go func() {
 		refreshesNumPer5Sec := 0
 		erroredNumPer5Sec := 0

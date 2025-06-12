@@ -25,42 +25,48 @@ var (
 // evictionStat carries statistics for each eviction batch.
 type evictionStat struct {
 	items int     // Number of evicted items
-	mem   uintptr // Total freed memory
+	mem   uintptr // Total freed Memory
 }
 
-// LRU is a memory-aware, sharded LRU cache with background eviction and refresh support.
+// LRU is a Memory-aware, sharded LRU cache with background eviction and refresh support.
 type LRU struct {
 	ctx             context.Context               // Main context for lifecycle control
 	cfg             *config.Config                // Cache configuration
 	shardedMap      *sharded.Map[*model.Response] // Sharded storage for cache entries
-	refresher       *Refresher                    // Background refresher (see refresher.go)
-	balancer        *Balancer                     // Helps pick shards to evict from
-	backend         repository.Backender
-	mem             int64 // Current memory usage (bytes)
-	memoryLimit     int64 // Hard limit for memory usage (bytes)
-	memoryThreshold int64 // Threshold for triggering eviction (bytes)
+	refresher       Refresher                     // Background refresher (see refresher.go)
+	balancer        Balancer                      // Helps pick shards to evict from
+	backend         repository.Backender          // Remote backend server.
+	mem             int64                         // Current Memory usage (bytes)
+	memoryLimit     int64                         // Hard limit for Memory usage (bytes)
+	memoryThreshold int64                         // Threshold for triggering eviction (bytes)
 }
 
 // NewLRU constructs a new LRU cache instance and launches eviction and refresh routines.
-func NewLRU(ctx context.Context, cfg *config.Config, backend repository.Backender, shardedMap *sharded.Map[*model.Response]) *LRU {
+func NewLRU(
+	ctx context.Context,
+	cfg *config.Config,
+	balancer Balancer,
+	refresher Refresher,
+	backend repository.Backender,
+	shardedMap *sharded.Map[*model.Response],
+) *LRU {
 	lru := &LRU{
 		ctx:             ctx,
 		cfg:             cfg,
-		backend:         backend,
 		shardedMap:      shardedMap,
+		refresher:       refresher,
+		balancer:        balancer,
+		backend:         backend,
 		memoryThreshold: int64(float64(cfg.MemoryLimit) * cfg.MemoryFillThreshold),
-		memoryLimit:     int64(cfg.MemoryLimit)/100 - 1, // Defensive: avoid going exactly to limit
+		memoryLimit:     int64(cfg.MemoryLimit)/100 - 8, // Defensive: avoid going exactly to limit
 	}
 
-	// Balancer is used to track and select overloaded shards for eviction.
-	lru.balancer = NewBalancer(lru.shardedMap)
 	// Register all existing shards with the balancer.
 	lru.shardedMap.WalkShards(func(shardKey uint64, shard *sharded.Shard[*model.Response]) {
-		lru.balancer.register(shard)
+		lru.balancer.Register(shard)
 	})
 
 	// Launch background refresher and evictors.
-	lru.refresher = NewRefresher(ctx, cfg, lru.balancer)
 	lru.refresher.RunRefresher()
 	lru.runEvictors()
 	if cfg.IsDebugOn() {
@@ -84,7 +90,7 @@ func (c *LRU) Get(req *model.Request) (*model.Response, *sharded.Releaser[*model
 	return nil, nil, false
 }
 
-// Set inserts or updates a response in the cache, updating memory usage and LRU position.
+// Set inserts or updates a response in the cache, updating Memory usage and LRU position.
 func (c *LRU) Set(new *model.Response) *sharded.Releaser[*model.Response] {
 	existing, releaser, found := c.shardedMap.Get(new.Request().Key(), new.Request().ShardKey())
 	if found {
@@ -97,26 +103,26 @@ func (c *LRU) Set(new *model.Response) *sharded.Releaser[*model.Response] {
 // touch bumps the LRU position of an existing entry (MoveToFront) and increases its refcount.
 func (c *LRU) touch(existing *model.Response) {
 	existing.IncRefCount()
-	c.balancer.move(existing.Request().ShardKey(), existing.LruListElement())
+	c.balancer.Move(existing.Request().ShardKey(), existing.LruListElement())
 }
 
-// update refreshes memory accounting and LRU position for an updated entry.
+// update refreshes Memory accounting and LRU position for an updated entry.
 func (c *LRU) update(existing, new *model.Response) {
 	atomic.AddInt64(&c.mem, int64(existing.Size()-new.Size()))
 	c.touch(existing)
-	c.balancer.move(new.Request().ShardKey(), existing.LruListElement())
+	c.balancer.Move(new.Request().ShardKey(), existing.LruListElement())
 }
 
-// set inserts a new response, updates memory usage and registers in balancer.
+// set inserts a new response, updates Memory usage and registers in balancer.
 func (c *LRU) set(new *model.Response) *sharded.Releaser[*model.Response] {
 	atomic.AddInt64(&c.mem, int64(new.Size()))
-	c.balancer.set(new)
+	c.balancer.Set(new)
 	return c.shardedMap.Set(new)
 }
 
-// del removes an entry and returns the amount of freed memory and whether it was present.
+// del removes an entry and returns the amount of freed Memory and whether it was present.
 func (c *LRU) del(resp *model.Response) (freedMem uintptr, isHit bool) {
-	return c.balancer.remove(resp.Key(), resp.ShardKey())
+	return c.balancer.Remove(resp.Key(), resp.ShardKey())
 }
 
 // runEvictors launches multiple evictor goroutines for concurrent eviction.
@@ -127,7 +133,7 @@ func (c *LRU) runEvictors() {
 }
 
 // evictor is the main background eviction loop for one worker.
-// Each worker tries to bring memory usage under the threshold by evicting from most loaded shards.
+// Each worker tries to bring Memory usage under the threshold by evicting from most loaded shards.
 func (c *LRU) evictor(id int) {
 	for {
 		select {
@@ -149,22 +155,22 @@ func (c *LRU) evictor(id int) {
 	}
 }
 
-// shouldEvict checks if current memory usage has reached or exceeded the threshold.
+// shouldEvict checks if current Memory usage has reached or exceeded the threshold.
 func (c *LRU) shouldEvict() bool {
 	return atomic.LoadInt64(&c.mem) >= c.memoryThreshold
 }
 
 // evictUntilWithinLimit repeatedly removes entries from the most loaded shard (tail of LRU)
-// until memory drops below threshold or no more can be evicted.
+// until Memory drops below threshold or no more can be evicted.
 func (c *LRU) evictUntilWithinLimit(id int) (items int, mem uintptr) {
 	for atomic.LoadInt64(&c.mem) > c.memoryThreshold {
-		shard, found := c.balancer.mostLoaded(id)
+		shard, found := c.balancer.MostLoaded(id)
 		if !found {
 			break
 		}
 		back := shard.lruList.Back()
 		if back == nil || back.Value == nil {
-			// Defensive: try to remove empty element to avoid leaks
+			// Defensive: try to Remove empty element to avoid leaks
 			shard.lruList.Remove(back)
 			continue
 		}
@@ -179,7 +185,7 @@ func (c *LRU) evictUntilWithinLimit(id int) (items int, mem uintptr) {
 	return
 }
 
-// runLogger emits detailed stats about evictions, memory, and GC activity every 5 seconds if debugging is enabled.
+// runLogger emits detailed stats about evictions, Memory, and GC activity every 5 seconds if debugging is enabled.
 func (c *LRU) runLogger() {
 	go func() {
 		ticker := utils.NewTicker(c.ctx, 5*time.Second)

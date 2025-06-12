@@ -38,10 +38,13 @@ type HttpServer struct {
 	cancel context.CancelFunc
 
 	cfg           *config.Config
-	metrics       *metrics.Metrics
-	server        *httpserver.HTTP
-	isServerAlive *atomic.Bool
 	db            storage.Storage
+	backend       repository.Backender
+	reader        synced.PooledReader
+	probe         liveness.Prober
+	metrics       metrics.Meter
+	server        httpserver.Server
+	isServerAlive *atomic.Bool
 }
 
 // New creates a new HttpServer, initializing metrics and the HTTP server itself.
@@ -50,7 +53,7 @@ func New(
 	ctx context.Context,
 	cfg *config.Config,
 	db storage.Storage,
-	seoRepo repository.Backender,
+	backend repository.Backender,
 	reader synced.PooledReader,
 	probe liveness.Prober,
 ) (*HttpServer, error) {
@@ -69,6 +72,9 @@ func New(
 		cancel:        cancel,
 		cfg:           cfg,
 		db:            db,
+		backend:       backend,
+		reader:        reader,
+		probe:         probe,
 		isServerAlive: &atomic.Bool{},
 	}
 
@@ -79,7 +85,7 @@ func New(
 	}
 
 	// Initialize HTTP server with all controllers and middlewares.
-	if err = srv.initServer(db, seoRepo, reader, probe); err != nil {
+	if err = srv.initServer(); err != nil {
 		log.Err(err).Msg(InitFailedErrorMessage)
 		return nil, errors.New(InitFailedErrorMessage)
 	}
@@ -146,17 +152,12 @@ func (s *HttpServer) initMetrics() error {
 }
 
 // initServer creates the HTTP server instance, sets up controllers and middlewares, and stores the result.
-func (s *HttpServer) initServer(
-	cache storage.Storage,
-	seoRepo repository.Backender,
-	reader synced.PooledReader,
-	probe liveness.Prober,
-) error {
+func (s *HttpServer) initServer() error {
 	ctx, cancel := context.WithCancel(s.ctx)
 	s.cancel = cancel
 
 	// Compose server with controllers and middlewares.
-	if server, err := httpserver.New(ctx, s.cfg, s.controllers(cache, seoRepo, reader, probe), s.middlewares()); err != nil {
+	if server, err := httpserver.New(ctx, s.cfg, s.controllers(), s.middlewares()); err != nil {
 		cancel()
 		log.Err(err).Msg(InitFailedErrorMessage)
 		return errors.New(InitFailedErrorMessage)
@@ -168,16 +169,11 @@ func (s *HttpServer) initServer(
 }
 
 // controllers returns all HTTP controllers for the server (endpoints/handlers).
-func (s *HttpServer) controllers(
-	cache storage.Storage,
-	seoRepo repository.Backender,
-	reader synced.PooledReader,
-	probe liveness.Prober,
-) []controller.HttpController {
+func (s *HttpServer) controllers() []controller.HttpController {
 	return []controller.HttpController{
-		api.NewLivenessController(probe),                             // Liveness/healthcheck endpoint
-		api.NewCacheController(s.ctx, s.cfg, cache, seoRepo, reader), // Main cache handler
-		controller2.NewPrometheusMetrics(s.ctx),                      // Prometheus metrics endpoint
+		api.NewLivenessController(s.probe),                              // Liveness/healthcheck endpoint
+		api.NewCacheController(s.ctx, s.cfg, s.db, s.backend, s.reader), // Main cache handler
+		controller2.NewPrometheusMetrics(s.ctx),                         // Prometheus metrics endpoint
 	}
 }
 
