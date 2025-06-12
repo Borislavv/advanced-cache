@@ -123,7 +123,7 @@ type Response struct {
 
 	revalidator func(ctx context.Context) (data *Data, err error) // Closure for refresh/revalidation
 
-	refCount int64 // Refcount for concurrent/lifecycle management
+	refCount int64 // refCount for concurrent/lifecycle management
 	isDoomed int64 // "Doomed" flag for objects marked for delete but still referenced
 
 	beta               int64 // e.g. 0.7*100 = 70, parameter for probabilistic refresh
