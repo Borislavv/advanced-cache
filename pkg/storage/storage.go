@@ -54,8 +54,8 @@ func New(
 	// Select and initialize storage backend by eviction algorithm type.
 	switch cache.Algorithm(cfg.EvictionAlgo) {
 	case cache.LRU:
-		// Least Recently Used (LRU) cache
-		s = lru.NewLRU(ctx, cfg, balancer, refresher, backend, shardedMap)
+		// Least Recently Used (Storage) cache
+		s = lru.NewStorage(ctx, cfg, balancer, refresher, backend, shardedMap)
 	default:
 		// Panic for unsupported/unknown algorithms.
 		panic("algorithm " + cfg.EvictionAlgo + " is not implemented yet")

@@ -33,7 +33,7 @@ type Refresher interface {
 
 // Refresh is responsible for background refreshing of cache entries.
 // It periodically samples random shards and randomly selects "cold" entries
-// (from the end of each shard's LRU list) to refresh if necessary.
+// (from the end of each shard's Storage list) to refresh if necessary.
 type Refresh struct {
 	ctx               context.Context
 	cfg               *config.Cache
@@ -106,7 +106,7 @@ func (r *Refresh) refresh(resp *model.Response) {
 	}
 }
 
-// refreshNode selects up to refreshSamples entries from the end of the given shard's LRU list.
+// refreshNode selects up to refreshSamples entries from the end of the given shard's Storage list.
 // For each candidate, if ShouldBeRefreshed() returns true and shardRateLimiter limiting allows, triggers an asynchronous refresh.
 func (r *Refresh) refreshNode(node *ShardNode) {
 	lru := node.lruList

@@ -5,7 +5,6 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/repository"
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/list"
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
 	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
@@ -28,8 +27,8 @@ type evictionStat struct {
 	mem   uintptr // Total freed Weight
 }
 
-// LRU is a Weight-aware, sharded LRU cache with background eviction and refresh support.
-type LRU struct {
+// Storage is a Weight-aware, sharded Storage cache with background eviction and refresh support.
+type Storage struct {
 	ctx             context.Context               // Main context for lifecycle control
 	cfg             *config.Cache                 // Cache configuration
 	shardedMap      *sharded.Map[*model.Response] // Sharded storage for cache entries
@@ -41,16 +40,16 @@ type LRU struct {
 	memoryThreshold int64                         // Threshold for triggering eviction (bytes)
 }
 
-// NewLRU constructs a new LRU cache instance and launches eviction and refresh routines.
-func NewLRU(
+// NewStorage constructs a new Storage cache instance and launches eviction and refresh routines.
+func NewStorage(
 	ctx context.Context,
 	cfg *config.Cache,
 	balancer Balancer,
 	refresher Refresher,
 	backend repository.Backender,
 	shardedMap *sharded.Map[*model.Response],
-) *LRU {
-	lru := &LRU{
+) *Storage {
+	storage := &Storage{
 		ctx:             ctx,
 		cfg:             cfg,
 		shardedMap:      shardedMap,
@@ -62,27 +61,27 @@ func NewLRU(
 	}
 
 	// Register all existing shards with the balancer.
-	lru.shardedMap.WalkShards(func(shardKey uint64, shard *sharded.Shard[*model.Response]) {
-		lru.balancer.Register(shard)
+	storage.shardedMap.WalkShards(func(shardKey uint64, shard *sharded.Shard[*model.Response]) {
+		storage.balancer.Register(shard)
 	})
 
 	// Launch background refresher and evictors.
-	lru.refresher.RunRefresher()
+	storage.refresher.RunRefresher()
 
-	lru.runEvictor()
+	storage.runEvictor()
 	if cfg.IsDebugOn() {
-		lru.runLogger()
+		storage.runLogger()
 	}
 
 	// Load dump of it exists in public/dump dir.
-	lru.loadDumpIfExists()
+	storage.loadDumpIfExists()
 
-	return lru
+	return storage
 }
 
-// Get retrieves a response by request and bumps its LRU position.
+// Get retrieves a response by request and bumps its Storage position.
 // Returns: (response, releaser, found).
-func (c *LRU) Get(req *model.Request) (*model.Response, *sharded.Releaser[*model.Response], bool) {
+func (c *Storage) Get(req *model.Request) (*model.Response, *sharded.Releaser[*model.Response], bool) {
 	resp, releaser, found := c.shardedMap.Get(req.Key(), req.ShardKey())
 	if found {
 		c.touch(resp)
@@ -91,8 +90,8 @@ func (c *LRU) Get(req *model.Request) (*model.Response, *sharded.Releaser[*model
 	return nil, nil, false
 }
 
-// Set inserts or updates a response in the cache, updating Weight usage and LRU position.
-func (c *LRU) Set(new *model.Response) *sharded.Releaser[*model.Response] {
+// Set inserts or updates a response in the cache, updating Weight usage and Storage position.
+func (c *Storage) Set(new *model.Response) *sharded.Releaser[*model.Response] {
 	existing, releaser, found := c.shardedMap.Get(new.Request().Key(), new.Request().ShardKey())
 	if found {
 		c.update(existing, new)
@@ -101,93 +100,28 @@ func (c *LRU) Set(new *model.Response) *sharded.Releaser[*model.Response] {
 	return c.set(new)
 }
 
-// touch bumps the LRU position of an existing entry (MoveToFront) and increases its refcount.
-func (c *LRU) touch(existing *model.Response) {
+// touch bumps the Storage position of an existing entry (MoveToFront) and increases its refcount.
+func (c *Storage) touch(existing *model.Response) {
 	existing.IncRefCount()
 	c.balancer.Move(existing.Request().ShardKey(), existing.LruListElement())
 }
 
-// update refreshes Weight accounting and LRU position for an updated entry.
-func (c *LRU) update(existing, new *model.Response) {
+// update refreshes Weight accounting and Storage position for an updated entry.
+func (c *Storage) update(existing, new *model.Response) {
 	atomic.AddInt64(&c.mem, int64(existing.Weight()-new.Weight()))
 	c.touch(existing)
 }
 
 // set inserts a new response, updates Weight usage and registers in balancer.
-func (c *LRU) set(new *model.Response) *sharded.Releaser[*model.Response] {
+func (c *Storage) set(new *model.Response) *sharded.Releaser[*model.Response] {
 	atomic.AddInt64(&c.mem, int64(new.Weight()))
 	releaser := c.shardedMap.Set(new)
 	c.balancer.Set(new)
 	return releaser
 }
 
-// runEvictor launches multiple evictor goroutines for concurrent eviction.
-func (c *LRU) runEvictor() {
-	go c.evictor()
-}
-
-// evictor is the main background eviction loop for one worker.
-// Each worker tries to bring Weight usage under the threshold by evicting from most loaded shards.
-func (c *LRU) evictor() {
-	for {
-		select {
-		case <-c.ctx.Done():
-			return
-		default:
-			if c.shouldEvict() {
-				items, memory := c.evictUntilWithinLimit()
-				if c.cfg.IsDebugOn() && (items > 0 || memory > 0) {
-					select {
-					case <-c.ctx.Done():
-						return
-					case evictionStatCh <- evictionStat{items: items, mem: memory}:
-					}
-				}
-			}
-			time.Sleep(time.Second)
-		}
-	}
-}
-
-// shouldEvict checks if current Weight usage has reached or exceeded the threshold.
-func (c *LRU) shouldEvict() bool {
-	return atomic.LoadInt64(&c.mem) >= c.memoryThreshold
-}
-
-// evictUntilWithinLimit repeatedly removes entries from the most loaded shard (tail of LRU)
-// until Weight drops below threshold or no more can be evicted.
-func (c *LRU) evictUntilWithinLimit() (items int, mem uintptr) {
-	for atomic.LoadInt64(&c.mem) > c.memoryThreshold {
-		shard, found := c.balancer.MostLoaded()
-		if !found {
-			break
-		}
-
-		shard.lruList.Walk(list.FromBack, func(l *list.List[*model.Response], el *list.Element[*model.Response]) bool {
-			old := el.Value().RefCount()
-			if el.Value().CASRefCount(old, old+1) && !el.Value().IsDoomed() {
-				select {
-				case <-c.ctx.Done():
-					return false
-				default:
-					freedMem, isHit := c.balancer.Remove(el.Value().Key(), el.Value().ShardKey())
-					if !isHit {
-						return true
-					}
-					items++
-					mem += freedMem
-					atomic.AddInt64(&c.mem, -int64(freedMem))
-					return true
-				}
-			}
-			return true
-		})
-	}
-	return
-}
-
 // runLogger emits detailed stats about evictions, Weight, and GC activity every 5 seconds if debugging is enabled.
-func (c *LRU) runLogger() {
+func (c *Storage) runLogger() {
 	go func() {
 		ticker := utils.NewTicker(c.ctx, 5*time.Second)
 		var (
@@ -236,13 +170,13 @@ func (c *LRU) runLogger() {
 	}()
 }
 
-func (c *LRU) loadDumpIfExists() {
+func (c *Storage) loadDumpIfExists() {
 	if err := c.LoadFromDir(c.ctx, dumpDir); err != nil {
 		log.Warn().Msg("failed to load dump: " + err.Error())
 	}
 }
 
-func (c *LRU) Stop() {
+func (c *Storage) Stop() {
 	// spawn a new one with limit for k8s timeout before the service will be received SIGKILL
 	dumpCtx, dumpCancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer dumpCancel()

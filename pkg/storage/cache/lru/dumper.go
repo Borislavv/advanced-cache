@@ -20,7 +20,7 @@ const (
 )
 
 // DumpToDir writes all shards into a single binary file with length-prefixed records.
-func (c *LRU) DumpToDir(ctx context.Context, dir string) error {
+func (c *Storage) DumpToDir(ctx context.Context, dir string) error {
 	from := time.Now()
 
 	filename := filepath.Join(dir, dumpFileName)
@@ -97,7 +97,7 @@ func (c *LRU) DumpToDir(ctx context.Context, dir string) error {
 }
 
 // LoadFromDir loads all data from the single dump file.
-func (c *LRU) LoadFromDir(ctx context.Context, dir string) error {
+func (c *Storage) LoadFromDir(ctx context.Context, dir string) error {
 	from := time.Now()
 
 	filename := filepath.Join(dir, dumpFileName)

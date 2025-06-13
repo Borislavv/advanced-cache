@@ -12,10 +12,10 @@ import (
 	"unsafe"
 )
 
-// ShardNode represents a single shard's LRU and accounting info.
-// Each shard has its own LRU list and a pointer to its element in the balancer's memList.
+// ShardNode represents a single shard's Storage and accounting info.
+// Each shard has its own Storage list and a pointer to its element in the balancer's memList.
 type ShardNode struct {
-	lruList     *list.List[*model.Response]     // Per-shard LRU list; less used responses at the back
+	lruList     *list.List[*model.Response]     // Per-shard Storage list; less used responses at the back
 	memListElem *list.Element[*ShardNode]       // Pointer to this node's position in Balance.memList
 	shard       *sharded.Shard[*model.Response] // Reference to the actual shard (map + sync)
 	len         int64                           // Number of items in the shard (atomically updated)
@@ -37,7 +37,7 @@ type Balancer interface {
 	Weight() uintptr
 }
 
-// Balance maintains per-shard LRU lists and provides efficient selection of loaded shards for eviction.
+// Balance maintains per-shard Storage lists and provides efficient selection of loaded shards for eviction.
 // - memList orders shardNodes by usage (most loaded in front).
 // - shards is a flat array for O(1) access by shard index.
 // - shardedMap is the underlying data storage (map of all entries).
@@ -82,7 +82,7 @@ func (b *Balance) RandShardNode() *ShardNode {
 	return b.shards[rand.Uint64N(sharded.ShardCount)]
 }
 
-// Register inserts a new ShardNode for a given shard, creates its LRU, and adds it to memList and shards array.
+// Register inserts a new ShardNode for a given shard, creates its Storage, and adds it to memList and shards array.
 func (b *Balance) Register(shard *sharded.Shard[*model.Response]) {
 	n := &ShardNode{
 		shard:   shard,
@@ -92,7 +92,7 @@ func (b *Balance) Register(shard *sharded.Shard[*model.Response]) {
 	b.shards[shard.ID()] = n
 }
 
-// Set inserts a response into the appropriate shard's LRU list and updates counters.
+// Set inserts a response into the appropriate shard's Storage list and updates counters.
 // Returns the affected ShardNode for further operations.
 func (b *Balance) Set(resp *model.Response) *ShardNode {
 	node := b.shards[resp.Request().ShardKey()]
@@ -101,13 +101,13 @@ func (b *Balance) Set(resp *model.Response) *ShardNode {
 	return node
 }
 
-// Move moves an element to the front of the per-shard LRU list.
+// Move moves an element to the front of the per-shard Storage list.
 // Used for touch/Set operations to mark entries as most recently used.
 func (b *Balance) Move(shardKey uint64, el *list.Element[*model.Response]) {
 	b.shards[shardKey].lruList.MoveToFront(el)
 }
 
-// Remove releases an entry from the shardedMap and removes it from the per-shard LRU list.
+// Remove releases an entry from the shardedMap and removes it from the per-shard Storage list.
 // Also updates counters and rebalances memList if necessary.
 // Returns (memory_freed, was_found).
 func (b *Balance) Remove(key uint64, shardKey uint64) (freedMem uintptr, isHit bool) {
