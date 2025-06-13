@@ -6,42 +6,40 @@ import (
 )
 
 // Element is a node in the doubly linked list that holds a value of type T.
-type Element[T any] struct {
+// Never touch fields directly outside of List methods.
+type Element[T Sortable] struct {
 	next, prev *Element[T]
 	list       *List[T]
-	Value      T
+	value      T
 }
 
-// Next returns the next element in the list or nil if it's the end or unlinked.
-func (e *Element[T]) Next() *Element[T] {
-	if p := e.next; e.list != nil && p != e.list.root {
-		return p
-	}
-	return nil
+// List returns the whole list if this element.
+func (e *Element[T]) List() *List[T] {
+	return e.list
 }
 
-// Prev returns the previous element in the list or nil if it's the beginning or unlinked.
-func (e *Element[T]) Prev() *Element[T] {
-	if p := e.prev; e.list != nil && p != e.list.root {
-		return p
-	}
-	return nil
+// Value returns the value. NOT thread-safe! Only use inside locked section or single-threaded use!
+func (e *Element[T]) Value() T {
+	return e.value
 }
 
-// List is a generic doubly linked list implementation with optional thread-safety and element pooling.
-type List[T any] struct {
+type Sortable interface {
+	Weight() uintptr
+}
+
+// List is a generic doubly linked list with optional thread safety.
+type List[T Sortable] struct {
 	len       int
 	isGuarded bool
-	mu        *sync.Mutex
+	mu        sync.Mutex
 	root      *Element[T]
 	elemPool  *synced.BatchPool[*Element[T]]
 }
 
-// New creates a new List instance. If isMustBeListAThreadSafe is true, it uses a mutex for concurrency safety.
-func New[T any](isMustBeListAThreadSafe bool) *List[T] {
+// New creates a new list. If isThreadSafe is true, all ops are guarded by a mutex.
+func New[T Sortable](isThreadSafe bool) *List[T] {
 	l := &List[T]{
-		mu:        &sync.Mutex{},
-		isGuarded: isMustBeListAThreadSafe,
+		isGuarded: isThreadSafe,
 		elemPool: synced.NewBatchPool[*Element[T]](synced.PreallocateBatchSize, func() *Element[T] {
 			return &Element[T]{}
 		}),
@@ -50,7 +48,6 @@ func New[T any](isMustBeListAThreadSafe bool) *List[T] {
 	return l
 }
 
-// init initializes or clears list l.
 func (l *List[T]) init() *List[T] {
 	root := l.elemPool.Get()
 	*root = Element[T]{}
@@ -61,8 +58,7 @@ func (l *List[T]) init() *List[T] {
 	return l
 }
 
-// Len returns the number of elements of list l.
-// The complexity is O(1).
+// Len returns the list length (O(1)). Thread-safe if guarded.
 func (l *List[T]) Len() int {
 	if l.isGuarded {
 		l.mu.Lock()
@@ -71,105 +67,57 @@ func (l *List[T]) Len() int {
 	return l.len
 }
 
-func (l *List[T]) SwapValues(a, b *Element[T]) {
-	if l.isGuarded {
-		l.mu.Lock()
-		defer l.mu.Unlock()
-	}
-	a.Value, b.Value = b.Value, a.Value
-}
-
-// Front returns the first element of list l or nil if the list is empty.
-func (l *List[T]) Front() *Element[T] {
-	if l.isGuarded {
-		l.mu.Lock()
-		defer l.mu.Unlock()
-	}
-	if l.len == 0 {
-		return nil
-	}
-	return l.root.next
-}
-
-// Back returns the last element of list l or nil if the list is empty.
-func (l *List[T]) Back() *Element[T] {
-	if l.isGuarded {
-		l.mu.Lock()
-		defer l.mu.Unlock()
-	}
-	if l.len == 0 {
-		return nil
-	}
-	return l.root.prev
-}
-
-// insert inserts e after at, increments l.len, and returns e.
 func (l *List[T]) insert(e, at *Element[T]) *Element[T] {
-	if at != nil {
-		e.prev = at
-		e.next = at.next
-	}
-
-	if e.prev != nil {
-		e.prev.next = e
-		e.next.prev = e
-	}
-
+	e.prev = at
+	e.next = at.next
+	at.next.prev = e
+	at.next = e
 	e.list = l
 	l.len++
-
 	return e
 }
 
-// insertValue is a convenience wrapper for insert(&Element{Value: v}, at).
 func (l *List[T]) insertValue(v T, at *Element[T]) *Element[T] {
 	el := l.elemPool.Get()
-	*el = Element[T]{Value: v}
+	*el = Element[T]{value: v}
 	return l.insert(el, at)
 }
 
-// remove removes e from its list, decrements l.len
-func (l *List[T]) remove(e *Element[T]) {
+func (l *List[T]) remove(e *Element[T]) T {
 	e.prev.next = e.next
 	e.next.prev = e.prev
+	val := e.value
+	e.next = nil
+	e.prev = nil
+	e.list = nil
 	l.elemPool.Put(e)
 	l.len--
+	return val
 }
 
-// move moves e to next to at.
-func (l *List[T]) move(e, at *Element[T]) {
-	if e == at {
-		return
-	}
-	e.prev.next = e.next
-	e.next.prev = e.prev
-
-	e.prev = at
-	e.next = at.next
-	e.prev.next = e
-	e.next.prev = e
-}
-
-// Remove removes e from l if e is an element of list l.
-// It returns the element value e.Value.
-// The element must not be nil.
-func (l *List[T]) Remove(e *Element[T]) any {
+// Remove removes e from l and returns its value. Thread-safe.
+func (l *List[T]) Remove(e *Element[T]) T {
 	if l.isGuarded {
 		l.mu.Lock()
 		defer l.mu.Unlock()
 	}
-	if e == nil {
-		return nil
+	if e == nil || e.list != l {
+		var zero T
+		return zero
 	}
-	if e.list == l {
-		// if e.list == l, l must have been initialized when e was inserted
-		// in l or l == nil (e is a zero Element) and l.remove will crash
-		l.remove(e)
-	}
-	return e.Value
+	return l.remove(e)
 }
 
-// PushFront inserts a new element e with value v at the front of list l and returns e.
+// RemoveUnlocked removes e from l and returns its value. Not thread-safe.
+func (l *List[T]) RemoveUnlocked(e *Element[T]) T {
+	if e == nil || e.list != l {
+		var zero T
+		return zero
+	}
+	return l.remove(e)
+}
+
+// PushFront inserts v at the front and returns new element. Thread-safe if guarded.
 func (l *List[T]) PushFront(v T) *Element[T] {
 	if l.isGuarded {
 		l.mu.Lock()
@@ -178,133 +126,104 @@ func (l *List[T]) PushFront(v T) *Element[T] {
 	return l.insertValue(v, l.root)
 }
 
-// PushBack inserts a new element e with value v at the back of list l and returns e.
+// PushBack inserts v at the back and returns new element. Thread-safe if guarded.
 func (l *List[T]) PushBack(v T) *Element[T] {
 	if l.isGuarded {
 		l.mu.Lock()
 		defer l.mu.Unlock()
 	}
-	var at *Element[T]
-	if l.root != nil {
-		at = l.root.prev
-	}
-	return l.insertValue(v, at)
+	return l.insertValue(v, l.root.prev)
 }
 
-// InsertBefore inserts a new element e with value v immediately before mark and returns e.
-// If mark is not an element of l, the list is not modified.
-// The mark must not be nil.
-func (l *List[T]) InsertBefore(v T, mark *Element[T]) *Element[T] {
-	if l.isGuarded {
-		l.mu.Lock()
-		defer l.mu.Unlock()
-	}
-	if mark.list != l {
-		return nil
-	}
-	// see comment in List.Remove about initialization of l
-	return l.insertValue(v, mark.prev)
-}
-
-// InsertAfter inserts a new element e with value v immediately after mark and returns e.
-// If mark is not an element of l, the list is not modified.
-// The mark must not be nil.
-func (l *List[T]) InsertAfter(v T, mark *Element[T]) *Element[T] {
-	if l.isGuarded {
-		l.mu.Lock()
-		defer l.mu.Unlock()
-	}
-	if mark.list != l {
-		return nil
-	}
-	// see comment in List.Remove about initialization of l
-	return l.insertValue(v, mark)
-}
-
-// MoveToFront moves element e to the front of list l.
-// If e is not an element of l, the list is not modified.
-// The element must not be nil.
+// MoveToFront moves e to front. Thread-safe if guarded.
 func (l *List[T]) MoveToFront(e *Element[T]) {
 	if l.isGuarded {
 		l.mu.Lock()
 		defer l.mu.Unlock()
 	}
-	if e == nil {
-		panic("e is nil")
-	}
-	if e.list != l {
+	if e == nil || e.list != l || l.root.next == e {
 		return
 	}
-	if l.root != nil && l.root.next == e {
-		return
-	}
-	// see comment in List.Remove about initialization of l
-	l.move(e, l.root)
+	l.remove(e)
+	l.insert(e, l.root)
 }
 
-// MoveToBack moves element e to the back of list l.
-// If e is not an element of l, the list is not modified.
-// The element must not be nil.
-func (l *List[T]) MoveToBack(e *Element[T]) {
+// SwapElements moves a and b (nodes, not just values) in the list. Thread-safe if guarded.
+func (l *List[T]) SwapElements(a, b *Element[T]) {
 	if l.isGuarded {
 		l.mu.Lock()
 		defer l.mu.Unlock()
 	}
-	if e.list != l || l.root.prev == e {
+	if a == nil || b == nil || a.list != l || b.list != l || a == b {
 		return
 	}
-	// see comment in List.Remove about initialization of l
-	l.move(e, l.root.prev)
+	// Actually swap elements, not values, for safety.
+	// Remove both (in either order), then re-insert each at the other's old position.
+	aPrev, aNext := a.prev, a.next
+	bPrev, bNext := b.prev, b.next
+
+	// Remove both from the list
+	a.prev.next = a.next
+	a.next.prev = a.prev
+	b.prev.next = b.next
+	b.next.prev = b.prev
+
+	// Insert a at b's original position
+	a.prev = bPrev
+	a.next = bNext
+	bPrev.next = a
+	bNext.prev = a
+
+	// Insert b at a's original position
+	b.prev = aPrev
+	b.next = aNext
+	aPrev.next = b
+	aNext.prev = b
 }
 
-// MoveBefore moves element e to its new position before mark.
-// If e or mark is not an element of l, or e == mark, the list is not modified.
-// The element and mark must not be nil.
-func (l *List[T]) MoveBefore(e, mark *Element[T]) {
+// Walk executes fn for each element in order (under lock if guarded).
+func (l *List[T]) Walk(dir Direction, fn func(l *List[T], el *Element[T]) (shouldContinue bool)) {
 	if l.isGuarded {
 		l.mu.Lock()
 		defer l.mu.Unlock()
 	}
-	if e.list != l || e == mark || mark.list != l {
+	switch dir {
+	case FromFront:
+		for e, n := l.root.next, l.len; n > 0; n, e = n-1, e.next {
+			if !fn(l, e) {
+				return
+			}
+		}
+	case FromBack:
+		for e, n := l.root.prev, l.len; n > 0; n, e = n-1, e.prev {
+			if !fn(l, e) {
+				return
+			}
+		}
+	default:
+		panic("unknown walk direction")
+	}
+}
+
+func (l *List[T]) Sort(ord Order) {
+	if l.isGuarded {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+	}
+	if l.len < 2 {
 		return
 	}
-	l.move(e, mark.prev)
-}
-
-// MoveAfter moves element e to its new position after mark.
-// If e or mark is not an element of l, or e == mark, the list is not modified.
-// The element and mark must not be nil.
-func (l *List[T]) MoveAfter(e, mark *Element[T]) {
-	if l.isGuarded {
-		l.mu.Lock()
-		defer l.mu.Unlock()
-	}
-	if e.list != l || e == mark || mark.list != l {
-		return
-	}
-	l.move(e, mark)
-}
-
-// PushBackList inserts a copy of another list at the back of list l.
-// The lists l and other may be the same. They must not be nil.
-func (l *List[T]) PushBackList(other *List[T]) {
-	if l.isGuarded {
-		l.mu.Lock()
-		defer l.mu.Unlock()
-	}
-	for i, e := other.Len(), other.Front(); i > 0; i, e = i-1, e.Next() {
-		l.insertValue(e.Value, l.root.prev)
-	}
-}
-
-// PushFrontList inserts a copy of another list at the front of list l.
-// The lists l and other may be the same. They must not be nil.
-func (l *List[T]) PushFrontList(other *List[T]) {
-	if l.isGuarded {
-		l.mu.Lock()
-		defer l.mu.Unlock()
-	}
-	for i, e := other.Len(), other.Back(); i > 0; i, e = i-1, e.Prev() {
-		l.insertValue(e.Value, l.root)
+	swapped := true
+	for swapped {
+		swapped = false
+		for curr := l.root.next; curr != nil && curr.next != l.root; curr = curr.next {
+			weightA := curr.Value().Weight()
+			weightB := curr.next.Value().Weight()
+			if (ord == DESC && weightA < weightB) ||
+				(ord == ASC && weightA > weightB) {
+				l.SwapElements(curr, curr.next)
+				swapped = true
+			}
+		}
 	}
 }

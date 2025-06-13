@@ -8,6 +8,7 @@ import (
 	"github.com/valyala/fasthttp"
 	"github.com/zeebo/xxh3"
 	"sync"
+	"sync/atomic"
 )
 
 const (
@@ -224,10 +225,10 @@ func (r *Request) setUpKey() uint64 {
 }
 
 // Key returns the computed hash key for the request.
-func (r *Request) Key() uint64 { return r.key }
+func (r *Request) Key() uint64 { return atomic.LoadUint64(&r.key) }
 
 // ShardKey returns the precomputed shard index.
-func (r *Request) ShardKey() uint64 { return r.shardKey }
+func (r *Request) ShardKey() uint64 { return atomic.LoadUint64(&r.shardKey) }
 
 // setUpShardKey computes the shard index from the key.
 func (r *Request) setUpShardKey(key uint64) {
@@ -271,7 +272,7 @@ func (r *Request) ToQuery() []byte { return r.uniqueQuery }
 
 // Release releases and resets the request (and any underlying buffer/tag slices) for reuse.
 func (r *Request) Release() {
-	r.clear()
 	r.releaseFn()
+	r.clear()
 	requestsPool.Put(r)
 }

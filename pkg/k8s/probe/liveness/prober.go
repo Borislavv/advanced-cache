@@ -2,8 +2,7 @@ package liveness
 
 import (
 	"context"
-	"gitlab.xbet.lan/v3group/backend/packages/go/logger/pkg/logger"
-	loggerenum "gitlab.xbet.lan/v3group/backend/packages/go/logger/pkg/logger/enum"
+	"github.com/rs/zerolog/log"
 	"time"
 )
 
@@ -34,8 +33,9 @@ type Prob struct {
 
 func NewProbe(timeout time.Duration) *Prob {
 	if timeout < time.Millisecond {
-		logger.JsonRawLog("min timeout duration is 1ms (timeout sat upped as 10ms as a more reasonable value, "+
-			"if you need it shorter, configure it's properly)", loggerenum.WarningLvl, TimeoutIsToShortError)
+		log.Err(TimeoutIsTooShortError).Msg("min timeout duration is 1ms " +
+			"(timeout sat upped as 10ms as a more reasonable value, " +
+			"if you need it shorter, configure it's properly)")
 		timeout = time.Millisecond * 10
 	}
 
@@ -66,8 +66,8 @@ func (p *Prob) IsAlive() bool {
 		select {
 		case p.askCh <- ctx:
 		case <-ctx.Done():
-			logger.JsonRawLog("liveness probe deadline exceeded while pushing trigger into channel"+
-				" (check the IsAlive method use context properly and also the Watch method was called)", loggerenum.ErrorLvl, ctx.Err())
+			log.Err(ctx.Err()).Msg("liveness probe deadline exceeded while pushing trigger into channel" +
+				" (check the IsAlive method use context properly and also the Watch method was called)")
 		}
 	}()
 

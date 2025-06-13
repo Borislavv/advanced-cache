@@ -11,8 +11,8 @@ require (
 	github.com/spf13/viper v1.20.1
 	github.com/valyala/fasthttp v1.62.0
 	github.com/zeebo/xxh3 v1.0.2
-	gitlab.xbet.lan/v3group/backend/packages/go/logger v1.1.0
 	go.uber.org/automaxprocs v1.6.0
+	golang.org/x/time v0.12.0
 )
 
 require (
@@ -22,7 +22,6 @@ require (
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.2.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/kelseyhightower/envconfig v1.4.0 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
@@ -33,7 +32,6 @@ require (
 	github.com/prometheus/common v0.64.0 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/sagikazarmark/locafero v0.9.0 // indirect
-	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/sourcegraph/conc v0.3.0 // indirect
 	github.com/spf13/afero v1.14.0 // indirect
 	github.com/spf13/cast v1.9.2 // indirect

@@ -37,7 +37,7 @@ func NewApp(ctx context.Context, cfg *config.Config, probe liveness.Prober) (*Ca
 	shardedMap := sharded.NewMap[*model.Response](cfg.InitStorageLengthPerShard)
 	reader := synced.NewPooledResponseReader(synced.PreallocateBatchSize)
 	backend := repository.NewBackend(&cfg.Cache, reader)
-	balancer := lru.NewBalancer(shardedMap)
+	balancer := lru.NewBalancer(ctx, shardedMap)
 	refresher := lru.NewRefresher(ctx, &cfg.Cache, balancer)
 	db := storage.New(ctx, &cfg.Cache, balancer, refresher, backend, shardedMap)
 

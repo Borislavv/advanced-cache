@@ -28,7 +28,7 @@ type Keyer interface {
 
 // Sizer provides memory usage accounting for cache entries.
 type Sizer interface {
-	Size() uintptr
+	Weight() uintptr
 }
 
 // Value must implement all cache entry interfaces: keying, sizing, and releasability.
@@ -69,7 +69,7 @@ func (smap *Map[V]) Get(key uint64, shardKey uint64) (value V, releaser *Release
 }
 
 // Release deletes a value by key, returning how much memory was freed and a pointer to its LRU/list element.
-func (smap *Map[V]) Release(key uint64) (freed uintptr, listElem any, ok bool) {
+func (smap *Map[V]) Release(key uint64) (freed uintptr, ok bool) {
 	return smap.Shard(key).Release(key)
 }
 

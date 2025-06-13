@@ -5,18 +5,21 @@ import (
 	"fmt"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
-	"github.com/Borislavv/traefik-http-cache-plugin/pkg/rate"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/list"
 	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/time/rate"
 	"math/rand"
 	"strconv"
 	"time"
 )
 
 const (
-	rateLimit      = 512 // Global limiter: maximum concurrent refreshes across all shards
-	refreshSamples = 32  // Number of items to sample per shard per refresh tick
+	rateLimit      = 16 // Global limiter: maximum concurrent refreshes across all shards
+	rateLimitBurst = 8  // Global limiter: maximum parallel requests.
+	refreshSamples = 16 // Number of items to sample per shard per refresh tick
+	// Max refreshes per second = rateLimit(32) * refreshSamples(32) = 1024.
 )
 
 var (
@@ -32,23 +35,25 @@ type Refresher interface {
 // It periodically samples random shards and randomly selects "cold" entries
 // (from the end of each shard's LRU list) to refresh if necessary.
 type Refresh struct {
-	ctx             context.Context
-	cfg             *config.Cache
-	balancer        *Balance
-	shardsSamplesCh chan *ShardNode
-	refreshRespCh   chan *model.Response
-	rate            rate.Limiter
+	ctx               context.Context
+	cfg               *config.Cache
+	balancer          *Balance
+	shardsSamplesCh   chan *ShardNode
+	refreshRespCh     chan *model.Response
+	shardRateLimiter  *rate.Limiter
+	updateRateLimiter *rate.Limiter
 }
 
 // NewRefresher constructs a Refresh.
 func NewRefresher(ctx context.Context, cfg *config.Cache, balancer *Balance) *Refresh {
 	return &Refresh{
-		ctx:             ctx,
-		cfg:             cfg,
-		balancer:        balancer,
-		shardsSamplesCh: make(chan *ShardNode),
-		refreshRespCh:   make(chan *model.Response, rateLimit),
-		rate:            rate.NewLimiter(ctx, rateLimit, 0),
+		ctx:               ctx,
+		cfg:               cfg,
+		balancer:          balancer,
+		shardsSamplesCh:   make(chan *ShardNode),
+		refreshRespCh:     make(chan *model.Response, rateLimit),
+		shardRateLimiter:  rate.NewLimiter(rateLimit, rateLimitBurst),
+		updateRateLimiter: rate.NewLimiter(rateLimit, rateLimitBurst),
 	}
 }
 
@@ -60,43 +65,29 @@ func (r *Refresh) RunRefresher() {
 		if r.cfg.IsDebugOn() {
 			r.runLogger()
 		}
-		r.spawnShardsSamplesProvider()
-		for node := range r.shardsSamplesCh {
-			r.provideRespRefreshSignal(node)
-		}
-	}()
-}
 
-// spawnShardsSamplesProvider continuously pushes random shard nodes into shardsSamplesCh for processing.
-// The channel is closed on shutdown.
-func (r *Refresh) spawnShardsSamplesProvider() {
-	go func() {
-		defer close(r.shardsSamplesCh)
-		for {
-			select {
-			case <-r.ctx.Done():
+		for { // Throttling (max 512 checks per second)
+			if err := r.shardRateLimiter.Wait(r.ctx); err != nil {
 				return
-			case <-r.rate.Chan(): // Throttling (max 1000 checks per second)
-				select {
-				case <-r.ctx.Done():
-					return
-				case r.shardsSamplesCh <- r.balancer.RandShardNode():
-				}
 			}
+
+			r.refreshNode(r.balancer.RandShardNode())
 		}
 	}()
 }
 
-// update attempts to refresh the given response via Revalidate.
+// refresh attempts to refresh the given response via Revalidate.
 // If successful, increments the refresh metric (in debug mode); otherwise increments the error metric.
-func (r *Refresh) update(resp *model.Response) {
+func (r *Refresh) refresh(resp *model.Response) {
+	defer resp.DecRefCount()
+
 	if err := resp.Revalidate(r.ctx); err != nil {
 		log.
 			Err(err).
 			Str("key", fmt.Sprintf("%v", resp.Key())).
 			Str("shardKey", fmt.Sprintf("%v", resp.ShardKey())).
 			Str("query", string(resp.ToQuery())).
-			Msg("response update failed")
+			Msg("response refresh failed")
 
 		if r.cfg.IsDebugOn() {
 			select {
@@ -115,9 +106,9 @@ func (r *Refresh) update(resp *model.Response) {
 	}
 }
 
-// provideRespRefreshSignal selects up to refreshSamples entries from the end of the given shard's LRU list.
-// For each candidate, if ShouldRefresh() returns true and rate limiting allows, triggers an asynchronous refresh.
-func (r *Refresh) provideRespRefreshSignal(node *ShardNode) {
+// refreshNode selects up to refreshSamples entries from the end of the given shard's LRU list.
+// For each candidate, if ShouldBeRefreshed() returns true and shardRateLimiter limiting allows, triggers an asynchronous refresh.
+func (r *Refresh) refreshNode(node *ShardNode) {
 	lru := node.lruList
 	length := lru.Len()
 	if length == 0 {
@@ -126,30 +117,54 @@ func (r *Refresh) provideRespRefreshSignal(node *ShardNode) {
 
 	// Uses round-robbin algo. when storage len is too short for sampling.
 	if length <= refreshSamples*10 {
-		elem := lru.Back()
-		for elem != nil {
-			if elem.Value != nil && elem.Value.ShouldRefresh() {
-				go r.update(elem.Value)
+		lru.Walk(list.FromBack, func(l *list.List[*model.Response], el *list.Element[*model.Response]) bool {
+			if el.Value().IsDoomed() {
+				return true
 			}
-			elem = elem.Prev()
-		}
+
+			el.Value().IncRefCount()
+			defer el.Value().DecRefCount()
+
+			select {
+			case <-r.ctx.Done():
+				return false
+			default:
+				if el.Value().ShouldBeRefreshed() {
+					go r.refresh(el.Value())
+				}
+				return true
+			}
+		})
 		return
 	}
 
 	// Uses sampling when storage len reached the threshold (refreshSamples*100=~320).
 	// Sampling algo. will be more effective from the threshold.
 	for i := 0; i < refreshSamples; i++ {
-		elem := lru.Back()
-		offset := rand.Intn(length)
-		for j := 0; j < offset && elem != nil; j++ {
-			elem = elem.Prev()
-		}
-		if elem == nil || elem.Value == nil {
-			continue
-		}
-		if elem.Value.ShouldRefresh() {
-			go r.update(elem.Value)
-		}
+		skipped := 0
+		lru.Walk(list.FromBack, func(l *list.List[*model.Response], el *list.Element[*model.Response]) bool {
+			if el.Value().IsDoomed() {
+				return true
+			}
+
+			el.Value().IncRefCount()
+			defer el.Value().DecRefCount()
+
+			select {
+			case <-r.ctx.Done():
+				return false
+			default:
+				offset := rand.Intn(length)
+				if skipped < offset {
+					skipped++
+					return true
+				}
+				if el.Value().ShouldBeRefreshed() {
+					go r.refresh(el.Value())
+				}
+				return true
+			}
+		})
 	}
 }
 

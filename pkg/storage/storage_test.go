@@ -2,6 +2,9 @@ package storage
 
 import (
 	"context"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/repository"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/cache/lru"
+	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
 	"os"
 	"runtime"
 	"runtime/pprof"
@@ -31,8 +34,14 @@ func BenchmarkReadFromStorage1000TimesPerIter(b *testing.B) {
 		MemoryFillThreshold:       0.95,
 		MemoryLimit:               1024 * 1024 * 1024 * 3, // 3GB
 	}
+
 	shardedMap := sharded.NewMap[*model.Response](cfg.InitStorageLengthPerShard)
-	db := New(ctx, cfg, shardedMap)
+	balancer := lru.NewBalancer(ctx, shardedMap)
+	refresher := lru.NewRefresher(ctx, cfg, balancer)
+	respReader := synced.NewPooledResponseReader(synced.PreallocateBatchSize)
+	backend := repository.NewBackend(cfg, respReader)
+	db := New(ctx, cfg, balancer, refresher, backend, shardedMap)
+
 	responses := mock.GenerateRandomResponses(cfg, b.N+1)
 	for _, resp := range responses {
 		db.Set(resp)
@@ -110,8 +119,14 @@ func BenchmarkWriteIntoStorage1000TimesPerIter(b *testing.B) {
 		MemoryFillThreshold:       0.95,
 		MemoryLimit:               1024 * 1024 * 1024 * 3, // 3GB
 	}
+
 	shardedMap := sharded.NewMap[*model.Response](cfg.InitStorageLengthPerShard)
-	db := New(ctx, cfg, shardedMap)
+	balancer := lru.NewBalancer(ctx, shardedMap)
+	refresher := lru.NewRefresher(ctx, cfg, balancer)
+	respReader := synced.NewPooledResponseReader(synced.PreallocateBatchSize)
+	backend := repository.NewBackend(cfg, respReader)
+	db := New(ctx, cfg, balancer, refresher, backend, shardedMap)
+
 	responses := mock.GenerateRandomResponses(cfg, b.N+1)
 	length := len(responses)
 
@@ -186,7 +201,12 @@ func BenchmarkGetAllocs(b *testing.B) {
 	}
 
 	shardedMap := sharded.NewMap[*model.Response](cfg.InitStorageLengthPerShard)
-	db := New(ctx, cfg, shardedMap)
+	balancer := lru.NewBalancer(ctx, shardedMap)
+	refresher := lru.NewRefresher(ctx, cfg, balancer)
+	respReader := synced.NewPooledResponseReader(synced.PreallocateBatchSize)
+	backend := repository.NewBackend(cfg, respReader)
+	db := New(ctx, cfg, balancer, refresher, backend, shardedMap)
+
 	resp := mock.GenerateRandomResponses(cfg, 1)[0]
 	db.Set(resp)
 	req := resp.Request()
@@ -212,7 +232,12 @@ func BenchmarkSetAllocs(b *testing.B) {
 	}
 
 	shardedMap := sharded.NewMap[*model.Response](cfg.InitStorageLengthPerShard)
-	db := New(ctx, cfg, shardedMap)
+	balancer := lru.NewBalancer(ctx, shardedMap)
+	refresher := lru.NewRefresher(ctx, cfg, balancer)
+	respReader := synced.NewPooledResponseReader(synced.PreallocateBatchSize)
+	backend := repository.NewBackend(cfg, respReader)
+	db := New(ctx, cfg, balancer, refresher, backend, shardedMap)
+
 	resp := mock.GenerateRandomResponses(cfg, 1)[0]
 
 	allocs := testing.AllocsPerRun(100_000, func() {

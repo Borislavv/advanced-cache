@@ -171,7 +171,7 @@ func (s *HttpServer) initServer() error {
 // controllers returns all HTTP controllers for the server (endpoints/handlers).
 func (s *HttpServer) controllers() []controller.HttpController {
 	return []controller.HttpController{
-		api.NewLivenessController(s.probe),                              // Liveness/healthcheck endpoint
+		liveness.NewController(s.probe),                                 // Liveness/healthcheck endpoint
 		api.NewCacheController(s.ctx, s.cfg, s.db, s.backend, s.reader), // Main cache handler
 		api2.NewPrometheusMetrics(s.ctx),                                // Metrics metrics endpoint
 	}

@@ -137,7 +137,7 @@ func NewResponse(
 	data *Data, req *Request, cfg *config.Cache,
 	revalidator func(ctx context.Context) (data *Data, err error),
 ) (*Response, error) {
-	return ResponsePool.Get().Init().clear().SetUp(
+	return ResponsePool.Get().clear().Init().SetUp(
 		cfg.RevalidateBeta, cfg.RevalidateInterval,
 		cfg.RefreshDurationThreshold, data, req, revalidator,
 	), nil
@@ -198,12 +198,12 @@ func (r *Response) ToQuery() []byte {
 
 // Key returns the key of the associated request.
 func (r *Response) Key() uint64 {
-	return atomic.LoadUint64(&r.request.Load().key)
+	return r.request.Load().Key()
 }
 
 // ShardKey returns the shard key of the associated request.
 func (r *Response) ShardKey() uint64 {
-	return atomic.LoadUint64(&r.request.Load().shardKey)
+	return r.request.Load().ShardKey()
 }
 
 // IsDoomed returns true if this object is scheduled for deletion.
@@ -241,10 +241,10 @@ func (r *Response) StoreRefCount(new int64) {
 	atomic.StoreInt64(&r.refCount, new)
 }
 
-// ShouldRefresh implements probabilistic refresh logic ("beta" algorithm).
+// ShouldBeRefreshed implements probabilistic refresh logic ("beta" algorithm).
 // Returns true if the entry is stale and, with a probability proportional to its staleness, should be refreshed now.
-func (r *Response) ShouldRefresh() bool {
-	if atomic.LoadInt64(&r.isDoomed) == 1 {
+func (r *Response) ShouldBeRefreshed() bool {
+	if atomic.LoadInt64(&r.isDoomed) != 0 {
 		return false
 	}
 
@@ -331,8 +331,8 @@ func (r *Response) NativeRevalidateInterval() int64 {
 	return atomic.LoadInt64(&r.revalidateInterval)
 }
 
-// Size estimates the in-memory size of this response (including dynamic fields).
-func (r *Response) Size() uintptr {
+// Weight estimates the in-memory size of this response (including dynamic fields).
+func (r *Response) Weight() uintptr {
 	var size = int(unsafe.Sizeof(r))
 
 	// Account for dynamic response fields
@@ -366,6 +366,7 @@ func (r *Response) Size() uintptr {
 func (r *Response) Release() bool {
 	r.data.Load().Release()
 	r.request.Load().Release()
+	r.lruListElem.Load().List().Remove(r.lruListElem.Load())
 	r.clear()
 	ResponsePool.Put(r)
 	return true
@@ -545,7 +546,7 @@ func (r *Response) UnmarshalBinary(data []byte, revalidatorMaker func(req *Reque
 	)
 
 	// Response
-	r.clear().SetUp(
+	r.clear().Init().SetUp(
 		float64(meta[0])/100,   // beta
 		time.Duration(meta[2]), // revalidateInterval
 		time.Duration(meta[1]), // minStaleDuration
