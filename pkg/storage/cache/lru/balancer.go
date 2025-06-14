@@ -52,7 +52,7 @@ type Balance struct {
 func NewBalancer(ctx context.Context, shardedMap *sharded.Map[*model.Response]) *Balance {
 	return &Balance{
 		ctx:        ctx,
-		memList:    list.New[*ShardNode](true), // Sorted mode for easier rebalancing
+		memList:    list.New[*ShardNode](), // Sorted mode for easier rebalancing
 		shardedMap: shardedMap,
 	}
 }
@@ -86,7 +86,7 @@ func (b *Balance) RandShardNode() *ShardNode {
 func (b *Balance) Register(shard *sharded.Shard[*model.Response]) {
 	n := &ShardNode{
 		shard:   shard,
-		lruList: list.New[*model.Response](true),
+		lruList: list.New[*model.Response](),
 	}
 	n.memListElem = b.memList.PushBack(n)
 	b.shards[shard.ID()] = n

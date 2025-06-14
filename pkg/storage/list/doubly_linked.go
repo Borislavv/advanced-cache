@@ -29,17 +29,16 @@ type Sortable interface {
 
 // List is a generic doubly linked list with optional thread safety.
 type List[T Sortable] struct {
-	len       int
-	isGuarded bool
-	mu        sync.Mutex
-	root      *Element[T]
-	elemPool  *synced.BatchPool[*Element[T]]
+	len      int
+	mu       *sync.Mutex
+	root     *Element[T]
+	elemPool *synced.BatchPool[*Element[T]]
 }
 
 // New creates a new list. If isThreadSafe is true, all ops are guarded by a mutex.
-func New[T Sortable](isThreadSafe bool) *List[T] {
+func New[T Sortable]() *List[T] {
 	l := &List[T]{
-		isGuarded: isThreadSafe,
+		mu: &sync.Mutex{},
 		elemPool: synced.NewBatchPool[*Element[T]](synced.PreallocateBatchSize, func() *Element[T] {
 			return &Element[T]{}
 		}),
@@ -60,10 +59,9 @@ func (l *List[T]) init() *List[T] {
 
 // Len returns the list length (O(1)). Thread-safe if guarded.
 func (l *List[T]) Len() int {
-	if l.isGuarded {
-		l.mu.Lock()
-		defer l.mu.Unlock()
-	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
 	return l.len
 }
 
@@ -97,19 +95,9 @@ func (l *List[T]) remove(e *Element[T]) T {
 
 // Remove removes e from l and returns its value. Thread-safe.
 func (l *List[T]) Remove(e *Element[T]) T {
-	if l.isGuarded {
-		l.mu.Lock()
-		defer l.mu.Unlock()
-	}
-	if e == nil || e.list != l {
-		var zero T
-		return zero
-	}
-	return l.remove(e)
-}
+	l.mu.Lock()
+	defer l.mu.Unlock()
 
-// RemoveUnlocked removes e from l and returns its value. Not thread-safe.
-func (l *List[T]) RemoveUnlocked(e *Element[T]) T {
 	if e == nil || e.list != l {
 		var zero T
 		return zero
@@ -119,44 +107,49 @@ func (l *List[T]) RemoveUnlocked(e *Element[T]) T {
 
 // PushFront inserts v at the front and returns new element. Thread-safe if guarded.
 func (l *List[T]) PushFront(v T) *Element[T] {
-	if l.isGuarded {
-		l.mu.Lock()
-		defer l.mu.Unlock()
-	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
 	return l.insertValue(v, l.root)
 }
 
 // PushBack inserts v at the back and returns new element. Thread-safe if guarded.
 func (l *List[T]) PushBack(v T) *Element[T] {
-	if l.isGuarded {
-		l.mu.Lock()
-		defer l.mu.Unlock()
-	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
 	return l.insertValue(v, l.root.prev)
 }
 
-// MoveToFront moves e to front. Thread-safe if guarded.
+// MoveToFront moves e to the front of the list without removing it from memory or touching the pool.
 func (l *List[T]) MoveToFront(e *Element[T]) {
-	if l.isGuarded {
-		l.mu.Lock()
-		defer l.mu.Unlock()
-	}
-	if e == nil || e.list != l || l.root.next == e {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if e == nil || e.list != l || e == l.root.next {
 		return
 	}
-	l.remove(e)
-	l.insert(e, l.root)
+
+	// Detach e
+	e.prev.next = e.next
+	e.next.prev = e.prev
+
+	// Move right after root (to front)
+	e.prev = l.root
+	e.next = l.root.next
+	l.root.next.prev = e
+	l.root.next = e
 }
 
 // SwapElements moves a and b (nodes, not just values) in the list. Thread-safe if guarded.
 func (l *List[T]) SwapElements(a, b *Element[T]) {
-	if l.isGuarded {
-		l.mu.Lock()
-		defer l.mu.Unlock()
-	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
 	if a == nil || b == nil || a.list != l || b.list != l || a == b {
 		return
 	}
+
 	// Actually swap elements, not values, for safety.
 	// Remove both (in either order), then re-insert each at the other's old position.
 	aPrev, aNext := a.prev, a.next
@@ -183,19 +176,18 @@ func (l *List[T]) SwapElements(a, b *Element[T]) {
 
 // Walk executes fn for each element in order (under lock if guarded).
 func (l *List[T]) Walk(dir Direction, fn func(l *List[T], el *Element[T]) (shouldContinue bool)) {
-	if l.isGuarded {
-		l.mu.Lock()
-		defer l.mu.Unlock()
-	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
 	switch dir {
 	case FromFront:
-		for e, n := l.root.next, l.len; n > 0; n, e = n-1, e.next {
+		for e, n := l.root.next, l.len; n > 0 && e != nil; n, e = n-1, e.next {
 			if !fn(l, e) {
 				return
 			}
 		}
 	case FromBack:
-		for e, n := l.root.prev, l.len; n > 0; n, e = n-1, e.prev {
+		for e, n := l.root.prev, l.len; n > 0 && e != nil; n, e = n-1, e.prev {
 			if !fn(l, e) {
 				return
 			}
@@ -206,13 +198,13 @@ func (l *List[T]) Walk(dir Direction, fn func(l *List[T], el *Element[T]) (shoul
 }
 
 func (l *List[T]) Sort(ord Order) {
-	if l.isGuarded {
-		l.mu.Lock()
-		defer l.mu.Unlock()
-	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
 	if l.len < 2 {
 		return
 	}
+
 	swapped := true
 	for swapped {
 		swapped = false
