@@ -118,12 +118,13 @@ func (r *Refresh) refreshNode(node *ShardNode) {
 	// Uses round-robbin algo. when storage len is too short for sampling.
 	if length <= refreshSamples*10 {
 		lru.Walk(list.FromBack, func(l *list.List[*model.Response], el *list.Element[*model.Response]) bool {
-			if el.Value().IsDoomed() {
-				return true
+			old := el.Value().RefCount()
+			if el.Value().CASRefCount(old, old+1) {
+				if el.Value().IsDoomed() {
+					el.Value().DecRefCount()
+					return true
+				}
 			}
-
-			el.Value().IncRefCount()
-			defer el.Value().DecRefCount()
 
 			select {
 			case <-r.ctx.Done():
@@ -131,6 +132,8 @@ func (r *Refresh) refreshNode(node *ShardNode) {
 			default:
 				if el.Value().ShouldBeRefreshed() {
 					go r.refresh(el.Value())
+				} else {
+					el.Value().DecRefCount()
 				}
 				return true
 			}
@@ -143,12 +146,13 @@ func (r *Refresh) refreshNode(node *ShardNode) {
 	for i := 0; i < refreshSamples; i++ {
 		skipped := 0
 		lru.Walk(list.FromBack, func(l *list.List[*model.Response], el *list.Element[*model.Response]) bool {
-			if el.Value().IsDoomed() {
-				return true
+			old := el.Value().RefCount()
+			if el.Value().CASRefCount(old, old+1) {
+				if el.Value().IsDoomed() {
+					el.Value().DecRefCount()
+					return true
+				}
 			}
-
-			el.Value().IncRefCount()
-			defer el.Value().DecRefCount()
 
 			select {
 			case <-r.ctx.Done():
@@ -161,6 +165,8 @@ func (r *Refresh) refreshNode(node *ShardNode) {
 				}
 				if el.Value().ShouldBeRefreshed() {
 					go r.refresh(el.Value())
+				} else {
+					el.Value().DecRefCount()
 				}
 				return true
 			}

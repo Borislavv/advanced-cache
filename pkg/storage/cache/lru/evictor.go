@@ -56,6 +56,7 @@ func (c *Storage) evictUntilWithinLimit() (items int, mem uintptr) {
 				case <-c.ctx.Done():
 					return false
 				default:
+					el.Value().DecRefCount()
 					freedMem, isHit := c.balancer.Remove(el.Value().Key(), el.Value().ShardKey())
 					if !isHit {
 						return true
