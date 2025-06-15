@@ -80,19 +80,10 @@ func NewRequest(q *fasthttp.Args) (*Request, error) {
 
 // setUp initializes the Request, interns all fields, builds keys, and sets up uniqueQuery.
 func (r *Request) setUp(project, domain, language []byte, tags [][]byte) *Request {
-	// Strict interning: all input slices are deduped
 	r.project = project
 	r.domain = domain
 	r.language = language
-
-	// Intern each tag value
-	for i, tag := range tags {
-		if len(tag) > 0 {
-			tags[i] = tag
-		}
-	}
 	r.tags = tags
-	r.uniqueQuery = r.uniqueQuery[:0]
 
 	r.setUpQuery()
 	r.setUpShardKey(r.setUpKey())
@@ -160,9 +151,8 @@ func (r *Request) setUpKey() uint64 {
 		panic(err)
 	}
 
-	key := hasher.Value.Sum64()
-	r.key = key
-	return key
+	r.key = hasher.Value.Sum64()
+	return r.key
 }
 
 // Key returns the computed hash key for the request.
