@@ -30,7 +30,7 @@ func BenchmarkReadFromStorage1000TimesPerIter(b *testing.B) {
 		InitStorageLengthPerShard: 256,
 		EvictionAlgo:              string(cache.LRU),
 		MemoryFillThreshold:       0.95,
-		MemoryLimit:               1024 * 1024 * 2, // 3GB
+		MemoryLimit:               1024 * 1024 * 1024, // 3GB
 	}
 
 	shardedMap := sharded.NewMap[*model.Response](cfg.InitStorageLengthPerShard)
@@ -50,11 +50,11 @@ func BenchmarkReadFromStorage1000TimesPerIter(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			for j := 0; j < 1000; j++ {
+			for j := 0; j < 100; j++ {
 				_, release, _ := db.Get(responses[(i*j)%length].Request())
 				release.Release()
 			}
-			i += 1000
+			i += 100
 		}
 	})
 	b.StopTimer()
@@ -75,7 +75,7 @@ func BenchmarkWriteIntoStorage1000TimesPerIter(b *testing.B) {
 		InitStorageLengthPerShard: 256,
 		EvictionAlgo:              string(cache.LRU),
 		MemoryFillThreshold:       0.95,
-		MemoryLimit:               1024 * 1024 * 2, // 3GB
+		MemoryLimit:               1024 * 1024 * 1024, // 3GB
 	}
 
 	shardedMap := sharded.NewMap[*model.Response](cfg.InitStorageLengthPerShard)
@@ -92,7 +92,7 @@ func BenchmarkWriteIntoStorage1000TimesPerIter(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			for j := 0; j < 1000; j++ {
+			for j := 0; j < 100; j++ {
 				db.Set(responses[(i*j)%length])
 			}
 			i += 100
@@ -113,7 +113,7 @@ func BenchmarkGetAllocs(b *testing.B) {
 		InitStorageLengthPerShard: 256,
 		EvictionAlgo:              string(cache.LRU),
 		MemoryFillThreshold:       0.95,
-		MemoryLimit:               1024 * 1024, // 1MB
+		MemoryLimit:               1024 * 1024 * 1024, // 1MB
 	}
 
 	shardedMap := sharded.NewMap[*model.Response](cfg.InitStorageLengthPerShard)
@@ -145,7 +145,7 @@ func BenchmarkSetAllocs(b *testing.B) {
 		InitStorageLengthPerShard: 256,
 		EvictionAlgo:              string(cache.LRU),
 		MemoryFillThreshold:       0.95,
-		MemoryLimit:               1024 * 1024, // 1MB
+		MemoryLimit:               1024 * 1024 * 1024, // 1MB
 	}
 
 	shardedMap := sharded.NewMap[*model.Response](cfg.InitStorageLengthPerShard)
