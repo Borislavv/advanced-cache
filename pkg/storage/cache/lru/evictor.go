@@ -34,7 +34,6 @@ func (c *Storage) usedMem() int64 {
 	used += model.GzipBufferPool.Mem()
 	used += model.GzipWriterPool.Mem()
 	used += model.HasherPool.Mem()
-	used += c.balancer.Weight()
 	return used
 }
 

@@ -1,7 +1,6 @@
 package list
 
 import (
-	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/types"
 	"sync"
 	"unsafe"
@@ -38,27 +37,22 @@ func (e *Element[T]) Weight() int64 {
 
 // List is a generic doubly linked list with optional thread safety.
 type List[T types.Sized] struct {
-	len      int
-	mu       *sync.Mutex
-	root     *Element[T]
-	elemPool *synced.BatchPool[*Element[T]]
+	len  int
+	mu   *sync.Mutex
+	root *Element[T]
 }
 
 // New creates a new list. If isThreadSafe is true, all ops are guarded by a mutex.
 func New[T types.Sized]() *List[T] {
 	l := &List[T]{
 		mu: &sync.Mutex{},
-		elemPool: synced.NewBatchPool[*Element[T]](synced.PreallocateBatchSize, func() *Element[T] {
-			return &Element[T]{}
-		}),
 	}
 	l.init()
 	return l
 }
 
 func (l *List[T]) init() *List[T] {
-	root := l.elemPool.Get()
-	*root = Element[T]{}
+	root := &Element[T]{}
 	l.root = root
 	l.root.next = l.root
 	l.root.prev = l.root
@@ -85,8 +79,7 @@ func (l *List[T]) insert(e, at *Element[T]) *Element[T] {
 }
 
 func (l *List[T]) insertValue(v T, at *Element[T]) *Element[T] {
-	el := l.elemPool.Get()
-	*el = Element[T]{value: v}
+	el := &Element[T]{value: v}
 	return l.insert(el, at)
 }
 
@@ -97,7 +90,6 @@ func (l *List[T]) remove(e *Element[T]) T {
 	e.next = nil
 	e.prev = nil
 	e.list = nil
-	l.elemPool.Put(e)
 	l.len--
 	return val
 }
