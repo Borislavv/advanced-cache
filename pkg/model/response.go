@@ -24,16 +24,6 @@ const gzipThreshold = 1024 // Minimum body size to apply gzip compression
 // -- Internal pools for efficient memory management --
 
 var (
-	DataPool = synced.NewBatchPool[*Data](synced.PreallocateBatchSize, func() *Data {
-		return new(Data)
-	})
-	ResponsePool = synced.NewBatchPool[*Response](synced.PreallocateBatchSize, func() *Response {
-		return &Response{
-			data:        &atomic.Pointer[Data]{},
-			request:     &atomic.Pointer[Request]{},
-			lruListElem: &atomic.Pointer[list.Element[*Response]]{},
-		}
-	})
 	GzipBufferPool = synced.NewBatchPool[*types.SizedBox[*bytes.Buffer]](synced.PreallocateBatchSize, func() *types.SizedBox[*bytes.Buffer] {
 		return &types.SizedBox[*bytes.Buffer]{
 			Value: new(bytes.Buffer),
@@ -62,17 +52,14 @@ type Data struct {
 	statusCode int
 	headers    http.Header
 	body       []byte
-	releaseFn  synced.FreeResourceFunc // To release memory/buffer if pooled
 }
 
 // NewData creates a new Data object, compressing body with gzip if large enough.
 // Uses memory pools for buffer and writer to minimize allocations.
-func NewData(statusCode int, headers http.Header, body []byte, releaseBody synced.FreeResourceFunc) *Data {
-	data := DataPool.Get()
-	*data = Data{
+func NewData(statusCode int, headers http.Header, body []byte) *Data {
+	data := &Data{
 		headers:    headers,
 		statusCode: statusCode,
-		releaseFn:  releaseBody,
 	}
 
 	// Compress body if it's large enough for gzip to help
@@ -80,22 +67,16 @@ func NewData(statusCode int, headers http.Header, body []byte, releaseBody synce
 		gzipper := GzipWriterPool.Get()
 		defer GzipWriterPool.Put(gzipper)
 
-		buf := GzipBufferPool.Get()
-		gzipper.Value.Reset(buf.Value)
-		buf.Value.Reset()
+		buf := new(bytes.Buffer)
+		gzipper.Value.Reset(buf)
+		buf.Reset()
 
 		_, err := gzipper.Value.Write(body)
 		if err == nil && gzipper.Value.Close() == nil {
 			headers.Set("Content-Encoding", "gzip")
-			data.body = buf.Value.Bytes()
+			data.body = append([]byte{}, buf.Bytes()...)
 		} else {
-			data.body = body
-		}
-
-		data.releaseFn = func() {
-			releaseBody()
-			buf.Value.Reset()
-			GzipBufferPool.Put(buf)
+			data.body = append([]byte{}, body...)
 		}
 	} else {
 		data.body = body
@@ -115,21 +96,6 @@ func (d *Data) StatusCode() int { return d.statusCode }
 
 // Body returns the response body (possibly gzip-compressed).
 func (d *Data) Body() []byte { return d.body }
-
-// clear zeroes the Data fields before pooling.
-func (d *Data) clear() {
-	d.statusCode = 0
-	d.headers = nil
-	d.body = nil
-	d.releaseFn = nil
-}
-
-// Release calls releaseFn and returns the Data to the pool.
-func (d *Data) Release() {
-	d.releaseFn()
-	d.clear()
-	DataPool.Put(d)
-}
 
 // Response is the main cache object, holding the request, payload, metadata, and list pointers.
 type Response struct {
@@ -154,7 +120,7 @@ func NewResponse(
 	data *Data, req *Request, cfg *config.Cache,
 	revalidator func(ctx context.Context) (data *Data, err error),
 ) (*Response, error) {
-	return ResponsePool.Get().clear().Init().SetUp(
+	return new(Response).Init().SetUp(
 		cfg.RevalidateBeta, cfg.RevalidateInterval,
 		cfg.RefreshDurationThreshold, data, req, revalidator,
 	), nil
@@ -187,22 +153,6 @@ func (r *Response) SetUp(beta float64, interval, minStale time.Duration, data *D
 	return r
 }
 
-// clear resets the Response for re-use from the pool.
-func (r *Response) clear() *Response {
-	r.revalidator = nil
-	r.refCount = 0
-	r.isDoomed = 0
-	r.revalidatedAt = 0
-	r.minStaleDuration = 0
-	r.revalidateInterval = 0
-	r.beta = 0
-	r.weight = 0
-	r.lruListElem.Store(nil)
-	r.request.Store(nil)
-	r.data.Store(nil)
-	return r
-}
-
 // --- Response API ---
 
 func (r *Response) Touch() *Response {
@@ -223,41 +173,6 @@ func (r *Response) Key() uint64 {
 // ShardKey returns the shard key of the associated request.
 func (r *Response) ShardKey() uint64 {
 	return r.request.Load().ShardKey()
-}
-
-// IsDoomed returns true if this object is scheduled for deletion.
-func (r *Response) IsDoomed() bool {
-	return atomic.LoadInt64(&r.isDoomed) == 1
-}
-
-// MarkAsDoomed marks the response as scheduled for delete, only if not already doomed.
-func (r *Response) MarkAsDoomed() bool {
-	return atomic.CompareAndSwapInt64(&r.isDoomed, 0, 1)
-}
-
-// RefCount returns the current refcount.
-func (r *Response) RefCount() int64 {
-	return atomic.LoadInt64(&r.refCount)
-}
-
-// IncRefCount increments the refcount.
-func (r *Response) IncRefCount() int64 {
-	return atomic.AddInt64(&r.refCount, 1)
-}
-
-// DecRefCount decrements the refcount.
-func (r *Response) DecRefCount() int64 {
-	return atomic.AddInt64(&r.refCount, -1)
-}
-
-// CASRefCount performs a CAS on the refcount.
-func (r *Response) CASRefCount(old, new int64) bool {
-	return atomic.CompareAndSwapInt64(&r.refCount, old, new)
-}
-
-// StoreRefCount stores a new refcount value directly.
-func (r *Response) StoreRefCount(new int64) {
-	atomic.StoreInt64(&r.refCount, new)
 }
 
 // ShouldBeRefreshed implements probabilistic refresh logic ("beta" algorithm).
@@ -385,19 +300,6 @@ func (r *Response) Weight() int64 {
 	return r.weight
 }
 
-// Release releases the associated Data and Request, resets the Response, and returns it to the pool.
-func (r *Response) Release() bool {
-	r.data.Load().Release()
-	r.request.Load().Release()
-	el := r.lruListElem.Load()
-	if el != nil {
-		el.List().Remove(el)
-	}
-	r.clear()
-	ResponsePool.Put(r)
-	return true
-}
-
 // MarshalBinary serializes Response+Request+Data into a length-prefixed binary format.
 // NO string/reflect, только "сырье"!
 func (r *Response) MarshalBinary() ([]byte, error) {
@@ -514,15 +416,14 @@ func (r *Response) UnmarshalBinary(data []byte, revalidatorMaker func(req *Reque
 	if err = binary.Read(buf, binary.LittleEndian, &tagsCount); err != nil {
 		return err
 	}
-	tags := TagsSlicesPool.Get()
+	tags := make([][]byte, 0, 10)
 	for i := 0; i < int(tagsCount); i++ {
 		tag, err := readBytes(buf)
 		if err != nil {
 			return err
 		}
-		tags.Value[i] = tag
+		tags = append(tags, tag)
 	}
-	tags.Value = tags.Value[:tagsCount]
 
 	var key, shardKey uint64
 	if err = binary.Read(buf, binary.LittleEndian, &key); err != nil {
@@ -558,21 +459,19 @@ func (r *Response) UnmarshalBinary(data []byte, revalidatorMaker func(req *Reque
 
 	// --- Make objects ---
 	// Data
-	dataObj := DataPool.Get()
-	*dataObj = Data{
+	dataObj := &Data{
 		statusCode: int(statusCode),
 		headers:    headers,
 		body:       body,
-		releaseFn:  func() {}, // no release
 	}
 
 	// Request
-	reqObj := RequestsPool.Get().clear().setUp(
-		project, domain, language, tags.Value, func() { TagsSlicesPool.Put(tags) },
+	reqObj := new(Request).setUp(
+		project, domain, language, tags,
 	)
 
 	// Response
-	r.clear().Init().SetUp(
+	r.Init().SetUp(
 		float64(meta[0])/100,   // beta
 		time.Duration(meta[2]), // revalidateInterval
 		time.Duration(meta[1]), // minStaleDuration
