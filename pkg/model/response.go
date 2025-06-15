@@ -105,9 +105,7 @@ type Response struct {
 
 	revalidator func(ctx context.Context) (data *Data, err error) // Closure for refresh/revalidation
 
-	weight   int64 // bytes
-	refCount int64 // refCount for concurrent/lifecycle management
-	isDoomed int64 // "Doomed" flag for objects marked for delete but still referenced
+	weight int64 // bytes
 
 	beta               int64 // e.g. 0.7*100 = 70, parameter for probabilistic refresh
 	minStaleDuration   int64 // How long to keep without any refresh (nanoseconds)
@@ -178,10 +176,6 @@ func (r *Response) ShardKey() uint64 {
 // ShouldBeRefreshed implements probabilistic refresh logic ("beta" algorithm).
 // Returns true if the entry is stale and, with a probability proportional to its staleness, should be refreshed now.
 func (r *Response) ShouldBeRefreshed() bool {
-	if atomic.LoadInt64(&r.isDoomed) != 0 {
-		return false
-	}
-
 	var (
 		beta             = atomic.LoadInt64(&r.beta)
 		interval         = atomic.LoadInt64(&r.revalidateInterval)
@@ -210,6 +204,7 @@ func (r *Response) Revalidate(ctx context.Context) error {
 	}
 
 	r.data.Store(data)
+	atomic.AddInt64(&r.weight, data.Weight()-r.data.Load().Weight())
 	atomic.StoreInt64(&r.revalidatedAt, time.Now().UnixNano())
 
 	return nil
@@ -218,11 +213,6 @@ func (r *Response) Revalidate(ctx context.Context) error {
 // Request returns the request pointer.
 func (r *Response) Request() *Request {
 	return r.request.Load()
-}
-
-// ShardListElement returns the LRU list element (for cache eviction).
-func (r *Response) ShardListElement() any {
-	return r.lruListElem.Load()
 }
 
 // LruListElement returns the LRU list element pointer (for LRU cache management).
@@ -253,16 +243,6 @@ func (r *Response) Headers() http.Header {
 // RevalidatedAt returns the last revalidation time (as time.Time).
 func (r *Response) RevalidatedAt() time.Time {
 	return time.Unix(0, atomic.LoadInt64(&r.revalidatedAt))
-}
-
-// NativeRevalidatedAt returns the last revalidation time (as int64).
-func (r *Response) NativeRevalidatedAt() int64 {
-	return atomic.LoadInt64(&r.revalidatedAt)
-}
-
-// NativeRevalidateInterval returns the revalidation interval (as int64).
-func (r *Response) NativeRevalidateInterval() int64 {
-	return atomic.LoadInt64(&r.revalidateInterval)
 }
 
 func (r *Response) setUpWeight() int64 {
