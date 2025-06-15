@@ -5,10 +5,6 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/repository"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/cache/lru"
 	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
-	"os"
-	"runtime"
-	"runtime/pprof"
-	"runtime/trace"
 	"testing"
 	"time"
 
@@ -26,13 +22,15 @@ func BenchmarkReadFromStorage1000TimesPerIter(b *testing.B) {
 	defer cancel()
 
 	cfg := &config.Cache{
-		BackendUrl:                "",
+		AppEnv:                    "dev",
+		AppDebug:                  true,
+		BackendUrl:                "https://seo-master.lux.kube.xbet.lan/api/v2/pagedata",
 		RevalidateBeta:            0.3,
 		RevalidateInterval:        time.Hour,
 		InitStorageLengthPerShard: 256,
 		EvictionAlgo:              string(cache.LRU),
 		MemoryFillThreshold:       0.95,
-		MemoryLimit:               1024 * 1024 * 1024 * 3, // 3GB
+		MemoryLimit:               1024 * 1024 * 2, // 3GB
 	}
 
 	shardedMap := sharded.NewMap[*model.Response](cfg.InitStorageLengthPerShard)
@@ -48,43 +46,6 @@ func BenchmarkReadFromStorage1000TimesPerIter(b *testing.B) {
 	}
 	length := len(responses)
 
-	cpuFile, err := os.Create("cpu_read.prof")
-	if err != nil {
-		panic("failed to create cpu_read.prof: " + err.Error())
-	}
-	defer cpuFile.Close()
-	if err := pprof.StartCPUProfile(cpuFile); err != nil {
-		panic("failed to start CPU profile: " + err.Error())
-	}
-	defer pprof.StopCPUProfile()
-
-	memFileBefore, err := os.Create("mem_before.prof")
-	if err != nil {
-		panic("failed to create mem_before.prof: " + err.Error())
-	}
-	defer memFileBefore.Close()
-
-	memFileAfter, err := os.Create("mem_after.prof")
-	if err != nil {
-		panic("failed to create mem_after.prof: " + err.Error())
-	}
-	defer memFileAfter.Close()
-
-	traceFile, err := os.Create("trace_read.out")
-	if err != nil {
-		panic("failed to create trace_read.out: " + err.Error())
-	}
-	defer traceFile.Close()
-	if err := trace.Start(traceFile); err != nil {
-		panic("failed to start trace: " + err.Error())
-	}
-	defer trace.Stop()
-
-	runtime.GC()
-	if err := pprof.WriteHeapProfile(memFileBefore); err != nil {
-		panic("failed to write heap profile (before): " + err.Error())
-	}
-
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
@@ -97,11 +58,6 @@ func BenchmarkReadFromStorage1000TimesPerIter(b *testing.B) {
 		}
 	})
 	b.StopTimer()
-
-	runtime.GC()
-	if err := pprof.WriteHeapProfile(memFileAfter); err != nil {
-		panic("failed to write heap profile (after): " + err.Error())
-	}
 }
 
 // BenchmarkWriteIntoStorage1000TimesPerIter benchmarks parallel cache writes with profile collection.
@@ -111,13 +67,15 @@ func BenchmarkWriteIntoStorage1000TimesPerIter(b *testing.B) {
 	defer cancel()
 
 	cfg := &config.Cache{
-		BackendUrl:                "",
+		AppEnv:                    "dev",
+		AppDebug:                  true,
+		BackendUrl:                "https://seo-master.lux.kube.xbet.lan/api/v2/pagedata",
 		RevalidateBeta:            0.3,
 		RevalidateInterval:        time.Hour,
 		InitStorageLengthPerShard: 256,
 		EvictionAlgo:              string(cache.LRU),
 		MemoryFillThreshold:       0.95,
-		MemoryLimit:               1024 * 1024 * 1024 * 3, // 3GB
+		MemoryLimit:               1024 * 1024 * 2, // 3GB
 	}
 
 	shardedMap := sharded.NewMap[*model.Response](cfg.InitStorageLengthPerShard)
@@ -130,60 +88,17 @@ func BenchmarkWriteIntoStorage1000TimesPerIter(b *testing.B) {
 	responses := mock.GenerateRandomResponses(cfg, b.N+1)
 	length := len(responses)
 
-	cpuFile, err := os.Create("cpu_write.prof")
-	if err != nil {
-		panic("failed to create cpu_write.prof: " + err.Error())
-	}
-	defer cpuFile.Close()
-	if err := pprof.StartCPUProfile(cpuFile); err != nil {
-		panic("failed to start CPU profile: " + err.Error())
-	}
-	defer pprof.StopCPUProfile()
-
-	memFileBefore, err := os.Create("mem_before.prof")
-	if err != nil {
-		panic("failed to create mem_before.prof: " + err.Error())
-	}
-	defer memFileBefore.Close()
-
-	memFileAfter, err := os.Create("mem_after.prof")
-	if err != nil {
-		panic("failed to create mem_after.prof: " + err.Error())
-	}
-	defer memFileAfter.Close()
-
-	traceFile, err := os.Create("trace_write.out")
-	if err != nil {
-		panic("failed to create trace_write.out: " + err.Error())
-	}
-	defer traceFile.Close()
-	if err := trace.Start(traceFile); err != nil {
-		panic("failed to start trace: " + err.Error())
-	}
-	defer trace.Stop()
-
-	runtime.GC()
-	if err := pprof.WriteHeapProfile(memFileBefore); err != nil {
-		panic("failed to write heap profile (before): " + err.Error())
-	}
-
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
 			for j := 0; j < 1000; j++ {
-				release := db.Set(responses[(i*j)%length])
-				release.Release()
+				db.Set(responses[(i*j)%length])
 			}
 			i += 100
 		}
 	})
 	b.StopTimer()
-
-	runtime.GC()
-	if err := pprof.WriteHeapProfile(memFileAfter); err != nil {
-		panic("failed to write heap profile (after): " + err.Error())
-	}
 }
 
 // BenchmarkGetAllocs benchmarks allocation count per Get() call.
@@ -192,6 +107,7 @@ func BenchmarkGetAllocs(b *testing.B) {
 	defer cancel()
 
 	cfg := &config.Cache{
+		BackendUrl:                "https://seo-master.lux.kube.xbet.lan/api/v2/pagedata",
 		RevalidateBeta:            0.3,
 		RevalidateInterval:        time.Hour,
 		InitStorageLengthPerShard: 256,
@@ -223,6 +139,7 @@ func BenchmarkSetAllocs(b *testing.B) {
 	defer cancel()
 
 	cfg := &config.Cache{
+		BackendUrl:                "https://seo-master.lux.kube.xbet.lan/api/v2/pagedata",
 		RevalidateBeta:            0.3,
 		RevalidateInterval:        time.Hour,
 		InitStorageLengthPerShard: 256,

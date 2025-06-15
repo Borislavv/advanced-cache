@@ -6,6 +6,7 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/model"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/list"
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/utils"
 	"math/rand/v2"
 	"sync/atomic"
 	"time"
@@ -22,19 +23,21 @@ type ShardNode struct {
 }
 
 // Weight returns an approximate Weight usage of this ShardNode structure.
-func (s *ShardNode) Weight() uintptr {
-	return unsafe.Sizeof(s) + uintptr(atomic.LoadInt64(&s.len)*consts.PtrBytesWeight)
+func (s *ShardNode) Weight() int64 {
+	return int64(unsafe.Sizeof(*s)) + atomic.LoadInt64(&s.len)*consts.PtrBytesWeight
 }
 
 type Balancer interface {
+	Rebalance()
 	Shards() [sharded.ShardCount]*ShardNode
 	RandShardNode() *ShardNode
 	Register(shard *sharded.Shard[*model.Response])
 	Set(resp *model.Response) *ShardNode
+	Update(existing *model.Response)
 	Move(shardKey uint64, el *list.Element[*model.Response])
-	Remove(key uint64, shardKey uint64) (freedMem uintptr, isHit bool)
-	MostLoaded() (*ShardNode, bool)
-	Weight() uintptr
+	Remove(shardKey uint64)
+	MostLoadedSampled(offset int) (*ShardNode, bool)
+	Weight() int64
 }
 
 // Balance maintains per-shard Storage lists and provides efficient selection of loaded shards for eviction.
@@ -59,18 +62,22 @@ func NewBalancer(ctx context.Context, shardedMap *sharded.Map[*model.Response]) 
 
 func (b *Balance) RunRebalancer() {
 	go func() {
-		t := time.NewTicker(time.Second)
-		defer t.Stop()
+		t := utils.NewTicker(b.ctx, time.Millisecond*500)
 		for {
 			select {
 			case <-b.ctx.Done():
 				return
-			case <-t.C:
-				// sort shardNodes by weight (mem)
+			case <-t:
+				// sort shardNodes by weight (freedMem)
 				b.memList.Sort(list.DESC)
 			}
 		}
 	}()
+}
+
+func (b *Balance) Rebalance() {
+	// sort shardNodes by weight (freedMem)
+	b.memList.Sort(list.DESC)
 }
 
 func (b *Balance) Shards() [sharded.ShardCount]*ShardNode {
@@ -101,6 +108,10 @@ func (b *Balance) Set(resp *model.Response) *ShardNode {
 	return node
 }
 
+func (b *Balance) Update(existing *model.Response) {
+	b.shards[existing.ShardKey()].lruList.MoveToFront(existing.LruListElement())
+}
+
 // Move moves an element to the front of the per-shard Storage list.
 // Used for touch/Set operations to mark entries as most recently used.
 func (b *Balance) Move(shardKey uint64, el *list.Element[*model.Response]) {
@@ -110,47 +121,23 @@ func (b *Balance) Move(shardKey uint64, el *list.Element[*model.Response]) {
 // Remove releases an entry from the shardedMap and removes it from the per-shard Storage list.
 // Also updates counters and rebalances memList if necessary.
 // Returns (memory_freed, was_found).
-func (b *Balance) Remove(key uint64, shardKey uint64) (freedMem uintptr, isHit bool) {
-	freed, isHit := b.shardedMap.Release(key)
-	if !isHit {
-		return 0, false
-	}
-
+func (b *Balance) Remove(shardKey uint64) {
 	atomic.AddInt64(&b.shards[shardKey].len, -1)
-
-	return freed, true
 }
 
-// MostLoaded returns the first non-empty shard node from the front of memList,
+// MostLoadedSampled returns the first non-empty shard node from the front of memList,
 // optionally skipping a number of nodes by offset (for concurrent eviction fairness).
-func (b *Balance) MostLoaded() (*ShardNode, bool) {
-	var found *list.Element[*ShardNode]
-	b.memList.Walk(list.FromFront, func(l *list.List[*ShardNode], el *list.Element[*ShardNode]) bool {
-		select {
-		case <-b.ctx.Done():
-			return false
-		default:
-			if el == nil {
-				panic("inconsistent memory list, e is nil, undefined behavior possible")
-			}
-			if el.Value().shard.Len() > 0 {
-				found = el
-				return false
-			}
-		}
-		return true
-	})
-
-	if found != nil {
-		return found.Value(), true
-	} else {
+func (b *Balance) MostLoadedSampled(offset int) (*ShardNode, bool) {
+	el, ok := b.memList.NextUnlocked(offset)
+	if !ok {
 		return nil, false
 	}
+	return el.Value(), ok
 }
 
 // Weight returns an approximate total Memory usage of all shards and the balancer itself.
-func (b *Balance) Weight() uintptr {
-	mem := unsafe.Sizeof(b) + uintptr(sharded.ShardCount*consts.PtrBytesWeight)
+func (b *Balance) Weight() int64 {
+	mem := int64(unsafe.Sizeof(*b)) + (int64(sharded.ShardCount) * consts.PtrBytesWeight)
 	for _, shard := range b.shards {
 		mem += shard.Weight()
 	}

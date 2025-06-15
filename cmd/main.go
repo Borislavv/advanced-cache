@@ -10,9 +10,13 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
 	"go.uber.org/automaxprocs/maxprocs"
+	"net/http"
+	"os"
 	"runtime"
+	"runtime/pprof"
 	"time"
 )
+import _ "net/http/pprof"
 
 // Initializes environment variables from .env files and binds them using Viper.
 // This allows overriding any value via environment variables.
@@ -66,6 +70,14 @@ func loadCfg() *config.Config {
 
 // Main entrypoint: configures and starts the cache application.
 func main() {
+	go func() {
+		http.ListenAndServe("localhost:6060", nil)
+	}()
+
+	f, _ := os.Create("heap.prof")
+	pprof.Lookup("heap").WriteTo(f, 0)
+	defer f.Close()
+
 	// Create a root context for gracefulShutdown shutdown and cancellation.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

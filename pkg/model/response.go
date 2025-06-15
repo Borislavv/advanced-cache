@@ -9,6 +9,7 @@ import (
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/config"
 	"github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/list"
 	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/types"
 	"io"
 	"math"
 	"math/rand/v2"
@@ -23,7 +24,7 @@ const gzipThreshold = 1024 // Minimum body size to apply gzip compression
 // -- Internal pools for efficient memory management --
 
 var (
-	dataPool = synced.NewBatchPool[*Data](synced.PreallocateBatchSize, func() *Data {
+	DataPool = synced.NewBatchPool[*Data](synced.PreallocateBatchSize, func() *Data {
 		return new(Data)
 	})
 	ResponsePool = synced.NewBatchPool[*Response](synced.PreallocateBatchSize, func() *Response {
@@ -33,15 +34,26 @@ var (
 			lruListElem: &atomic.Pointer[list.Element[*Response]]{},
 		}
 	})
-	gzipBufferPool = synced.NewBatchPool[*bytes.Buffer](synced.PreallocateBatchSize, func() *bytes.Buffer {
-		return new(bytes.Buffer)
+	GzipBufferPool = synced.NewBatchPool[*types.SizedBox[*bytes.Buffer]](synced.PreallocateBatchSize, func() *types.SizedBox[*bytes.Buffer] {
+		return &types.SizedBox[*bytes.Buffer]{
+			Value: new(bytes.Buffer),
+			CalcWeightFn: func(s *types.SizedBox[*bytes.Buffer]) int64 {
+				return int64(unsafe.Sizeof(*s)) + int64(s.Value.Len())
+			},
+		}
 	})
-	gzipWriterPool = synced.NewBatchPool[*gzip.Writer](synced.PreallocateBatchSize, func() *gzip.Writer {
+	GzipWriterPool = synced.NewBatchPool[*types.SizedBox[*gzip.Writer]](synced.PreallocateBatchSize, func() *types.SizedBox[*gzip.Writer] {
 		w, err := gzip.NewWriterLevel(nil, gzip.BestSpeed)
 		if err != nil {
 			panic("failed to Init. gzip writer: " + err.Error())
 		}
-		return w
+		return &types.SizedBox[*gzip.Writer]{
+			Value: w,
+			CalcWeightFn: func(s *types.SizedBox[*gzip.Writer]) int64 {
+				const approxGzipWriterWeight = 16 * 1024 // на инстанс
+				return int64(unsafe.Sizeof(*s)) + approxGzipWriterWeight
+			},
+		}
 	})
 )
 
@@ -56,7 +68,7 @@ type Data struct {
 // NewData creates a new Data object, compressing body with gzip if large enough.
 // Uses memory pools for buffer and writer to minimize allocations.
 func NewData(statusCode int, headers http.Header, body []byte, releaseBody synced.FreeResourceFunc) *Data {
-	data := dataPool.Get()
+	data := DataPool.Get()
 	*data = Data{
 		headers:    headers,
 		statusCode: statusCode,
@@ -65,30 +77,34 @@ func NewData(statusCode int, headers http.Header, body []byte, releaseBody synce
 
 	// Compress body if it's large enough for gzip to help
 	if len(body) > gzipThreshold {
-		gzipper := gzipWriterPool.Get()
-		defer gzipWriterPool.Put(gzipper)
+		gzipper := GzipWriterPool.Get()
+		defer GzipWriterPool.Put(gzipper)
 
-		buf := gzipBufferPool.Get()
-		gzipper.Reset(buf)
-		buf.Reset()
+		buf := GzipBufferPool.Get()
+		gzipper.Value.Reset(buf.Value)
+		buf.Value.Reset()
 
-		_, err := gzipper.Write(body)
-		if err == nil && gzipper.Close() == nil {
+		_, err := gzipper.Value.Write(body)
+		if err == nil && gzipper.Value.Close() == nil {
 			headers.Set("Content-Encoding", "gzip")
-			data.body = buf.Bytes()
+			data.body = buf.Value.Bytes()
 		} else {
 			data.body = body
 		}
 
 		data.releaseFn = func() {
 			releaseBody()
-			buf.Reset()
-			gzipBufferPool.Put(buf)
+			buf.Value.Reset()
+			GzipBufferPool.Put(buf)
 		}
 	} else {
 		data.body = body
 	}
 	return data
+}
+
+func (d *Data) Weight() int64 {
+	return int64(unsafe.Sizeof(*d)) + int64(len(d.body))
 }
 
 // Headers returns the response headers.
@@ -112,7 +128,7 @@ func (d *Data) clear() {
 func (d *Data) Release() {
 	d.releaseFn()
 	d.clear()
-	dataPool.Put(d)
+	DataPool.Put(d)
 }
 
 // Response is the main cache object, holding the request, payload, metadata, and list pointers.
@@ -123,6 +139,7 @@ type Response struct {
 
 	revalidator func(ctx context.Context) (data *Data, err error) // Closure for refresh/revalidation
 
+	weight   int64 // bytes
 	refCount int64 // refCount for concurrent/lifecycle management
 	isDoomed int64 // "Doomed" flag for objects marked for delete but still referenced
 
@@ -166,6 +183,7 @@ func (r *Response) SetUp(beta float64, interval, minStale time.Duration, data *D
 	r.beta = int64(beta * 100)
 	r.revalidateInterval = interval.Nanoseconds()
 	r.minStaleDuration = minStale.Nanoseconds()
+	r.weight = r.setUpWeight()
 	return r
 }
 
@@ -178,6 +196,7 @@ func (r *Response) clear() *Response {
 	r.minStaleDuration = 0
 	r.revalidateInterval = 0
 	r.beta = 0
+	r.weight = 0
 	r.lruListElem.Store(nil)
 	r.request.Store(nil)
 	r.data.Store(nil)
@@ -331,9 +350,8 @@ func (r *Response) NativeRevalidateInterval() int64 {
 	return atomic.LoadInt64(&r.revalidateInterval)
 }
 
-// Weight estimates the in-memory size of this response (including dynamic fields).
-func (r *Response) Weight() uintptr {
-	var size = int(unsafe.Sizeof(r))
+func (r *Response) setUpWeight() int64 {
+	var size = int(unsafe.Sizeof(*r))
 
 	// Account for dynamic response fields
 	data := r.data.Load()
@@ -350,7 +368,7 @@ func (r *Response) Weight() uintptr {
 	// Account for dynamic request fields
 	req := r.Request()
 	if req != nil {
-		size += int(unsafe.Sizeof(req))
+		size += int(unsafe.Sizeof(*req))
 		size += len(req.project)
 		size += len(req.domain)
 		size += len(req.language)
@@ -359,14 +377,22 @@ func (r *Response) Weight() uintptr {
 		}
 	}
 
-	return uintptr(size)
+	return int64(size)
+}
+
+// Weight estimates the in-memory size of this response (including dynamic fields).
+func (r *Response) Weight() int64 {
+	return r.weight
 }
 
 // Release releases the associated Data and Request, resets the Response, and returns it to the pool.
 func (r *Response) Release() bool {
 	r.data.Load().Release()
 	r.request.Load().Release()
-	r.lruListElem.Load().List().Remove(r.lruListElem.Load())
+	el := r.lruListElem.Load()
+	if el != nil {
+		el.List().Remove(el)
+	}
 	r.clear()
 	ResponsePool.Put(r)
 	return true
@@ -488,15 +514,15 @@ func (r *Response) UnmarshalBinary(data []byte, revalidatorMaker func(req *Reque
 	if err = binary.Read(buf, binary.LittleEndian, &tagsCount); err != nil {
 		return err
 	}
-	tags := tagsSlicesPool.Get()
+	tags := TagsSlicesPool.Get()
 	for i := 0; i < int(tagsCount); i++ {
 		tag, err := readBytes(buf)
 		if err != nil {
 			return err
 		}
-		tags[i] = internSlice(tag)
+		tags.Value[i] = tag
 	}
-	tags = tags[:tagsCount]
+	tags.Value = tags.Value[:tagsCount]
 
 	var key, shardKey uint64
 	if err = binary.Read(buf, binary.LittleEndian, &key); err != nil {
@@ -532,7 +558,7 @@ func (r *Response) UnmarshalBinary(data []byte, revalidatorMaker func(req *Reque
 
 	// --- Make objects ---
 	// Data
-	dataObj := dataPool.Get()
+	dataObj := DataPool.Get()
 	*dataObj = Data{
 		statusCode: int(statusCode),
 		headers:    headers,
@@ -541,8 +567,8 @@ func (r *Response) UnmarshalBinary(data []byte, revalidatorMaker func(req *Reque
 	}
 
 	// Request
-	reqObj := requestsPool.Get().clear().setUp(
-		project, domain, language, tags, func() { tagsSlicesPool.Put(tags) },
+	reqObj := RequestsPool.Get().clear().setUp(
+		project, domain, language, tags.Value, func() { TagsSlicesPool.Put(tags) },
 	)
 
 	// Response

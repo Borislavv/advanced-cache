@@ -1,9 +1,9 @@
 package sharded
 
 import (
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/consts"
 	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
 	"sync"
-	"sync/atomic"
 	"unsafe"
 )
 
@@ -24,6 +24,10 @@ type Releaser[V Value] struct {
 	val   V                               // Value being tracked
 	relFn func(v V) bool                  // Release function: decrements refCount, may free value
 	pool  *synced.BatchPool[*Releaser[V]] // Pool for recycling this object
+}
+
+func (r *Releaser[V]) Weight() int64 {
+	return int64(unsafe.Sizeof(*r)) + consts.PtrBytesWeight
 }
 
 // NewReleaser returns a pooled Releaser for a value, with a custom release logic.
@@ -76,30 +80,35 @@ func (shard *Shard[V]) ID() uint64 {
 }
 
 // Weight returns an approximate total memory usage for this shard (including overhead).
-func (shard *Shard[V]) Weight() uintptr {
-	return unsafe.Sizeof(shard) + uintptr(atomic.LoadInt64(&shard.mem))
+func (shard *Shard[V]) Weight() int64 {
+	shard.RLock()
+	defer shard.RUnlock()
+	return int64(unsafe.Sizeof(*shard)) + shard.mem
 }
 
 // Len returns the number of entries in the shard (non-atomic, for stats only).
-func (shard *Shard[V]) Len() int {
-	return int(atomic.LoadInt64(&shard.len))
+func (shard *Shard[V]) Len() int64 {
+	shard.RLock()
+	defer shard.RUnlock()
+	return shard.len
 }
 
 // Set inserts or updates a value by key, resets refCount, and updates counters.
 // Returns a releaser for the inserted value.
-func (shard *Shard[V]) Set(key uint64, value V) *Releaser[V] {
+func (shard *Shard[V]) Set(key uint64, value V) (takenMem int64, releaser *Releaser[V]) {
 	shard.Lock()
 	defer shard.Unlock()
 
 	value.StoreRefCount(1)
 
 	shard.items[key] = value
+	takenMem = value.Weight()
 
-	atomic.AddInt64(&shard.len, 1)
-	atomic.AddInt64(&shard.mem, int64(value.Weight()))
+	shard.len += 1
+	shard.mem += takenMem
 
 	// Return a releaser for this value (for the user to release later).
-	return NewReleaser(value, shard.releaserPool)
+	return takenMem, NewReleaser(value, shard.releaserPool)
 }
 
 // Get retrieves a value and returns a releaser for it, incrementing its refCount.
@@ -117,7 +126,7 @@ func (shard *Shard[V]) Get(key uint64) (val V, releaser *Releaser[V], isHit bool
 
 // Release removes a value from the shard, decrements counters, and may trigger full resource cleanup.
 // Returns (memory_freed, pointer_to_list_element, was_found).
-func (shard *Shard[V]) Release(key uint64) (freed uintptr, isHit bool) {
+func (shard *Shard[V]) Release(key uint64) (freed int64, isHit bool) {
 	shard.Lock()
 	defer shard.Unlock()
 
@@ -125,15 +134,16 @@ func (shard *Shard[V]) Release(key uint64) (freed uintptr, isHit bool) {
 	if ok {
 		delete(shard.items, key)
 
-		atomic.AddInt64(&shard.len, -1)
-		atomic.AddInt64(&shard.mem, -int64(v.Weight()))
+		weight := v.Weight()
+		shard.len -= 1
+		shard.mem -= weight
 
 		// If all references are gone, call Release; otherwise mark as doomed for future cleanup.
 		if v.MarkAsDoomed() && v.RefCount() == 0 {
 			v.Release()
 		}
 
-		return v.Weight(), true
+		return weight, true
 	}
 
 	return 0, false

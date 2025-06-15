@@ -11,7 +11,6 @@ import (
 	"github.com/rs/zerolog/log"
 	"runtime"
 	"strconv"
-	"sync/atomic"
 	"time"
 )
 
@@ -23,11 +22,11 @@ var (
 
 // evictionStat carries statistics for each eviction batch.
 type evictionStat struct {
-	items int     // Number of evicted items
-	mem   uintptr // Total freed Weight
+	items    int   // Number of evicted items
+	freedMem int64 // Total freed Weight
 }
 
-// Storage is a Weight-aware, sharded Storage cache with background eviction and refresh support.
+// Storage is a Weight-aware, sharded Storage cache with background eviction and refreshItem support.
 type Storage struct {
 	ctx             context.Context               // Main context for lifecycle control
 	cfg             *config.Cache                 // Cache configuration
@@ -36,11 +35,10 @@ type Storage struct {
 	balancer        Balancer                      // Helps pick shards to evict from
 	backend         repository.Backender          // Remote backend server.
 	mem             int64                         // Current Weight usage (bytes)
-	memoryLimit     int64                         // Hard limit for Weight usage (bytes)
 	memoryThreshold int64                         // Threshold for triggering eviction (bytes)
 }
 
-// NewStorage constructs a new Storage cache instance and launches eviction and refresh routines.
+// NewStorage constructs a new Storage cache instance and launches eviction and refreshItem routines.
 func NewStorage(
 	ctx context.Context,
 	cfg *config.Cache,
@@ -57,7 +55,6 @@ func NewStorage(
 		balancer:        balancer,
 		backend:         backend,
 		memoryThreshold: int64(float64(cfg.MemoryLimit) * cfg.MemoryFillThreshold),
-		memoryLimit:     int64(cfg.MemoryLimit)/100 - 8, // Defensive: avoid going exactly to limit
 	}
 
 	// Register all existing shards with the balancer.
@@ -65,16 +62,15 @@ func NewStorage(
 		storage.balancer.Register(shard)
 	})
 
+	// Load dump of it exists in public/dump dir.
+	storage.loadDumpIfExists()
+
 	// Launch background refresher and evictors.
 	storage.refresher.RunRefresher()
-
 	storage.runEvictor()
 	if cfg.IsDebugOn() {
 		storage.runLogger()
 	}
-
-	// Load dump of it exists in public/dump dir.
-	storage.loadDumpIfExists()
 
 	return storage
 }
@@ -100,21 +96,28 @@ func (c *Storage) Set(new *model.Response) *sharded.Releaser[*model.Response] {
 	return c.set(new)
 }
 
+// Del does not guarantee that the item will be deleted at this time because other users may exist.
+func (c *Storage) del(key uint64, shardKey uint64) (freed int64, isHit bool) {
+	freed, isHit = c.shardedMap.Release(key)
+	if isHit {
+		c.balancer.Remove(shardKey)
+	}
+	return freed, isHit
+}
+
 // touch bumps the Storage position of an existing entry (MoveToFront) and increases its refcount.
 func (c *Storage) touch(existing *model.Response) {
-	existing.IncRefCount()
-	c.balancer.Move(existing.Request().ShardKey(), existing.LruListElement())
+	c.balancer.Update(existing)
 }
 
 // update refreshes Weight accounting and Storage position for an updated entry.
 func (c *Storage) update(existing, new *model.Response) {
-	atomic.AddInt64(&c.mem, int64(existing.Weight()-new.Weight()))
-	c.touch(existing)
+	c.shardedMap.Update(existing, new)
+	c.balancer.Update(existing)
 }
 
 // set inserts a new response, updates Weight usage and registers in balancer.
 func (c *Storage) set(new *model.Response) *sharded.Releaser[*model.Response] {
-	atomic.AddInt64(&c.mem, int64(new.Weight()))
 	releaser := c.shardedMap.Set(new)
 	c.balancer.Set(new)
 	return releaser
@@ -126,7 +129,7 @@ func (c *Storage) runLogger() {
 		ticker := utils.NewTicker(c.ctx, 5*time.Second)
 		var (
 			evictsNumPer5Sec int
-			evictsMemPer5Sec uintptr
+			evictsMemPer5Sec int64
 		)
 		for {
 			select {
@@ -134,31 +137,31 @@ func (c *Storage) runLogger() {
 				return
 			case stat := <-evictionStatCh:
 				evictsNumPer5Sec += stat.items
-				evictsMemPer5Sec += stat.mem
+				evictsMemPer5Sec += stat.freedMem
 			case <-ticker:
 				var m runtime.MemStats
 				runtime.ReadMemStats(&m)
 
 				var (
-					mem        = utils.FmtMem(uintptr(atomic.LoadInt64(&c.mem)))
+					mem        = utils.FmtMem(c.usedMem())
 					length     = strconv.Itoa(int(c.shardedMap.Len()))
 					gc         = strconv.Itoa(int(m.NumGC))
-					limit      = utils.FmtMem(uintptr(c.cfg.MemoryLimit))
+					limit      = utils.FmtMem(int64(c.cfg.MemoryLimit))
 					goroutines = strconv.Itoa(runtime.NumGoroutine())
-					alloc      = utils.FmtMem(uintptr(m.Alloc))
+					alloc      = utils.FmtMem(int64(m.Alloc))
 					freedMem   = utils.FmtMem(evictsMemPer5Sec)
 				)
 
 				log.
 					Info().
 					//Str("target", "lru").
-					//Str("mem", mem).
+					//Str("freedMem", freedMem).
 					//Str("len", length).
 					//Str("GC", gc).
 					//Str("memLimit", limit).
 					//Str("goroutines", goroutines).
 					Msgf(
-						"[lru][5s] evicted (items: %d, mem: %s), "+
+						"[lru][5s] evicted (items: %d, freedMem: %s), "+
 							"storage (usage: %s, len: %s, limit: %s), sys (alloc: %s, goroutines: %s, GC: %s)",
 						evictsNumPer5Sec, freedMem, mem, length, limit, alloc, goroutines, gc,
 					)

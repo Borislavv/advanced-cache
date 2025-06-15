@@ -40,35 +40,36 @@ func (c *Storage) DumpToDir(ctx context.Context, dir string) error {
 	errors := 0
 	success := 0
 	for shardID, node := range c.balancer.Shards() {
-		node.shard.Walk(ctx, func(_ uint64, resp *model.Response) {
+		node.shard.Walk(ctx, func(_ uint64, resp *model.Response) bool {
 			select {
 			case <-ctx.Done():
-				return
+				return false
 			default:
 				if data, err := resp.MarshalBinary(); err != nil {
 					log.Err(err).Msg("[dump] " + fmt.Errorf("marshal data to binary failed: %w", err).Error())
 					errors++
-					return
+					return true
 				} else {
 					// [shard_id:uint16][len:uint32][payload]
 					if err = binary.Write(bufWriter, binary.LittleEndian, uint16(shardID)); err != nil {
 						log.Err(err).Msg("[dump] write shard_id to binary failed")
 						errors++
-						return
+						return true
 					}
 					if err = binary.Write(bufWriter, binary.LittleEndian, uint32(len(data))); err != nil {
 						log.Err(err).Msg("[dump] write payload length to binary failed")
 						errors++
-						return
+						return true
 					}
 					if _, err := bufWriter.Write(data); err != nil {
 						log.Err(err).Msg("[dump] write payload to binary failed")
 						errors++
-						return
+						return true
 					}
 					success++
 				}
 			}
+			return true
 		}, true)
 	}
 

@@ -3,12 +3,14 @@ package model
 import (
 	"bytes"
 	"errors"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/consts"
 	sharded "github.com/Borislavv/traefik-http-cache-plugin/pkg/storage/map"
 	synced "github.com/Borislavv/traefik-http-cache-plugin/pkg/sync"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/types"
 	"github.com/valyala/fasthttp"
 	"github.com/zeebo/xxh3"
-	"sync"
 	"sync/atomic"
+	"unsafe"
 )
 
 const (
@@ -17,66 +19,46 @@ const (
 	maxTagsLen                 = 10  // Maximum number of tags per request
 )
 
-// internPool maintains strict string interning for high efficiency in memory usage.
-// All unique byte slices (e.g. project/domain/tag names) are pooled here for deduplication.
-type internPool struct {
-	mu *sync.RWMutex
-	mm map[string][]byte
-}
-
 var (
-	// interningPool stores unique byte slices to enforce strict interning and avoid duplication.
-	interningPool = &internPool{
-		mu: &sync.RWMutex{},
-		mm: make(map[string][]byte, synced.PreallocateBatchSize*10),
-	}
-
 	// Pools for reusable objects and buffers.
-	hasherPool = synced.NewBatchPool[*xxh3.Hasher](synced.PreallocateBatchSize, func() *xxh3.Hasher {
-		return xxh3.New()
+	HasherPool = synced.NewBatchPool[*types.SizedBox[*xxh3.Hasher]](synced.PreallocateBatchSize, func() *types.SizedBox[*xxh3.Hasher] {
+		return &types.SizedBox[*xxh3.Hasher]{
+			Value: xxh3.New(),
+			CalcWeightFn: func(box *types.SizedBox[*xxh3.Hasher]) int64 {
+				return int64(unsafe.Sizeof(*box.Value)) + 1024 + 64 + 8 // digged inside struct and calculated
+			},
+		}
 	})
-	requestsPool = synced.NewBatchPool[*Request](synced.PreallocateBatchSize, func() *Request {
+	RequestsPool = synced.NewBatchPool[*Request](synced.PreallocateBatchSize, func() *Request {
 		return &Request{
 			uniqueQuery: make([]byte, 0, preallocatedBufferCapacity+(maxTagsLen+tagBufferCapacity)),
 		}
 	})
-	keyBufferPool = synced.NewBatchPool[[]byte](synced.PreallocateBatchSize, func() []byte {
-		return make([]byte, 0, preallocatedBufferCapacity)
+	KeyBufferPool = synced.NewBatchPool[*types.SizedBox[[]byte]](synced.PreallocateBatchSize, func() *types.SizedBox[[]byte] {
+		return &types.SizedBox[[]byte]{
+			Value: make([]byte, 0, preallocatedBufferCapacity),
+			CalcWeightFn: func(box *types.SizedBox[[]byte]) int64 {
+				return int64(cap(box.Value)) + consts.PtrBytesWeight
+			},
+		}
 	})
-	// Used for one-time preallocation; not reused as a typical pool.
-	preallocatorBufferPool = synced.NewBatchPool[[]byte](synced.PreallocateBatchSize, func() []byte {
-		return make([]byte, 0, preallocatedBufferCapacity)
-	})
-	tagsSlicesPool = synced.NewBatchPool[[][]byte](synced.PreallocateBatchSize, func() [][]byte {
+	TagsSlicesPool = synced.NewBatchPool[*types.SizedBox[[][]byte]](synced.PreallocateBatchSize, func() *types.SizedBox[[][]byte] {
 		batch := make([][]byte, maxTagsLen)
 		for i := range batch {
 			batch[i] = make([]byte, 0, tagBufferCapacity)
 		}
-		return batch
+		return &types.SizedBox[[][]byte]{
+			Value: batch,
+			CalcWeightFn: func(box *types.SizedBox[[][]byte]) int64 {
+				weight := int64(unsafe.Sizeof(box.Value))
+				for _, tag := range box.Value {
+					weight += int64(cap(tag)) + int64(unsafe.Sizeof(tag))
+				}
+				return int64(cap(box.Value))
+			},
+		}
 	})
 )
-
-// internSlice returns a shared []byte for identical inputs to reduce allocations (true string interning).
-func internSlice(b []byte) []byte {
-	key := string(b)
-
-	interningPool.mu.RLock()
-	if v, ok := interningPool.mm[key]; ok {
-		interningPool.mu.RUnlock()
-		return v
-	}
-	interningPool.mu.RUnlock()
-
-	slBytes := preallocatorBufferPool.Get() // "Plays" as a preallocator, not a true pool.
-	slBytes = slBytes[:0]
-	slBytes = append(slBytes, b...)
-
-	interningPool.mu.Lock()
-	interningPool.mm[key] = slBytes
-	interningPool.mu.Unlock()
-
-	return slBytes
-}
 
 // Request holds normalized, deduplicated, hashed and uniquely queryable representation of a cache request.
 type Request struct {
@@ -90,9 +72,22 @@ type Request struct {
 	releaseFn   func()   // Function to release underlying resources/buffers
 }
 
+func (r *Request) Weight() int64 {
+	weight := int(unsafe.Sizeof(*r))
+	weight += len(r.project)
+	weight += len(r.domain)
+	weight += len(r.language)
+	weight += len(r.uniqueQuery)
+	weight += len(r.tags)
+	for _, tag := range r.tags {
+		weight += len(tag)
+	}
+	return int64(weight)
+}
+
 // NewManualRequest creates a Request with explicit parameters, bypassing fasthttp.
 func NewManualRequest(project, domain, language []byte, tags [][]byte) (*Request, error) {
-	r, err := requestsPool.Get().clear().setUp(project, domain, language, tags, func() {}).validate()
+	r, err := RequestsPool.Get().clear().setUp(project, domain, language, tags, func() {}).validate()
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +102,7 @@ func NewRequest(q *fasthttp.Args) (*Request, error) {
 		language        = q.Peek("language")
 		tags, releaseFn = extractTags(q)
 	)
-	r, err := requestsPool.Get().clear().setUp(project, domain, language, tags, releaseFn).validate()
+	r, err := RequestsPool.Get().clear().setUp(project, domain, language, tags, releaseFn).validate()
 	if err != nil {
 		return nil, err
 	}
@@ -117,14 +112,14 @@ func NewRequest(q *fasthttp.Args) (*Request, error) {
 // setUp initializes the Request, interns all fields, builds keys, and sets up uniqueQuery.
 func (r *Request) setUp(project, domain, language []byte, tags [][]byte, releaseFn func()) *Request {
 	// Strict interning: all input slices are deduped
-	r.project = internSlice(project)
-	r.domain = internSlice(domain)
-	r.language = internSlice(language)
+	r.project = project
+	r.domain = domain
+	r.language = language
 
 	// Intern each tag value
 	for i, tag := range tags {
 		if len(tag) > 0 {
-			tags[i] = internSlice(tag)
+			tags[i] = tag
 		}
 	}
 	r.tags = tags
@@ -170,10 +165,10 @@ func extractTags(args *fasthttp.Args) ([][]byte, func()) {
 		choiceValue = []byte("choice")
 	)
 
-	tagsSls := tagsSlicesPool.Get()
+	tagsSls := TagsSlicesPool.Get()
 	// Reset each tag slice
-	for i := range tagsSls {
-		tagsSls[i] = tagsSls[i][:0]
+	for i := range tagsSls.Value {
+		tagsSls.Value[i] = tagsSls.Value[i][:0]
 	}
 
 	i := 0
@@ -181,13 +176,13 @@ func extractTags(args *fasthttp.Args) ([][]byte, func()) {
 		if !bytes.HasPrefix(key, choiceValue) || bytes.Equal(value, nullValue) {
 			return
 		}
-		tagsSls[i] = internSlice(value)
+		tagsSls.Value[i] = value
 		i++
 	})
 
 	// Only return used tags
-	tags := tagsSls[:i]
-	return tags, func() { tagsSlicesPool.Put(tagsSls) }
+	tags := tagsSls.Value[:i]
+	return tags, func() { TagsSlicesPool.Put(tagsSls) }
 }
 
 // Getters for all important fields.
@@ -198,28 +193,28 @@ func (r *Request) GetTags() [][]byte   { return r.tags }
 
 // setUpKey computes a unique hash key (xxh3) for this request.
 func (r *Request) setUpKey() uint64 {
-	buf := keyBufferPool.Get()
-	defer keyBufferPool.Put(buf)
-	buf = buf[:0]
+	buf := KeyBufferPool.Get()
+	defer KeyBufferPool.Put(buf)
+	buf.Value = buf.Value[:0]
 
-	buf = append(buf, r.project...)
-	buf = append(buf, r.domain...)
-	buf = append(buf, r.language...)
+	buf.Value = append(buf.Value, r.project...)
+	buf.Value = append(buf.Value, r.domain...)
+	buf.Value = append(buf.Value, r.language...)
 	for _, tag := range r.tags {
 		if len(tag) == 0 {
 			continue
 		}
-		buf = append(buf, tag...)
+		buf.Value = append(buf.Value, tag...)
 	}
 
-	hasher := hasherPool.Get()
-	defer hasherPool.Put(hasher)
-	hasher.Reset()
-	if _, err := hasher.Write(buf); err != nil {
+	hasher := HasherPool.Get()
+	defer HasherPool.Put(hasher)
+	hasher.Value.Reset()
+	if _, err := hasher.Value.Write(buf.Value); err != nil {
 		panic(err)
 	}
 
-	key := hasher.Sum64()
+	key := hasher.Value.Sum64()
 	r.key = key
 	return key
 }
@@ -274,5 +269,5 @@ func (r *Request) ToQuery() []byte { return r.uniqueQuery }
 func (r *Request) Release() {
 	r.releaseFn()
 	r.clear()
-	requestsPool.Put(r)
+	RequestsPool.Put(r)
 }

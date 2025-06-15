@@ -2,44 +2,24 @@ package sharded
 
 import (
 	"context"
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/types"
 	"sync"
 	"sync/atomic"
 )
 
-const ShardCount uint64 = 4096 // Total number of shards (power of 2 for fast hashing)
-
-// Releasable defines reference-counted resource management for cache values.
-type Releasable interface {
-	Release() bool
-	RefCount() int64
-	IncRefCount() int64
-	CASRefCount(old, new int64) bool
-	StoreRefCount(new int64)
-	IsDoomed() bool
-	MarkAsDoomed() bool
-	ShardListElement() any // Used for pointer to the element in the LRU or similar
-}
-
-// Keyer defines a unique key and a precomputed shard key for the value.
-type Keyer interface {
-	Key() uint64
-	ShardKey() uint64
-}
-
-// Sizer provides memory usage accounting for cache entries.
-type Sizer interface {
-	Weight() uintptr
-}
+const ShardCount uint64 = 32 // Total number of shards (power of 2 for fast hashing)
 
 // Value must implement all cache entry interfaces: keying, sizing, and releasability.
 type Value interface {
-	Keyer
-	Sizer
-	Releasable
+	types.Keyed
+	types.Sized
+	types.Releasable
 }
 
 // Map is a sharded concurrent map for high-performance caches.
 type Map[V Value] struct {
+	len    int64
+	mem    int64
 	shards [ShardCount]*Shard[V]
 }
 
@@ -59,7 +39,10 @@ func MapShardKey(key uint64) uint64 {
 
 // Set inserts or updates a value in the correct shard. Returns a releaser for ref counting.
 func (smap *Map[V]) Set(value V) *Releaser[V] {
-	return smap.shards[value.ShardKey()].Set(value.Key(), value)
+	takenMem, releaser := smap.shards[value.ShardKey()].Set(value.Key(), value)
+	atomic.AddInt64(&smap.len, 1)
+	atomic.AddInt64(&smap.mem, takenMem)
+	return releaser
 }
 
 // Get fetches a value and its releaser from the correct shard.
@@ -68,14 +51,23 @@ func (smap *Map[V]) Get(key uint64, shardKey uint64) (value V, releaser *Release
 	return smap.shards[shardKey].Get(key)
 }
 
+func (smap *Map[V]) Update(old, new V) {
+	//atomic.AddInt64(&smap.mem, new.Weight()-old.Weight())
+}
+
 // Release deletes a value by key, returning how much memory was freed and a pointer to its LRU/list element.
-func (smap *Map[V]) Release(key uint64) (freed uintptr, ok bool) {
-	return smap.Shard(key).Release(key)
+func (smap *Map[V]) Release(key uint64) (freed int64, isHit bool) {
+	freed, isHit = smap.Shard(key).Release(key)
+	if isHit {
+		atomic.AddInt64(&smap.len, -1)
+		atomic.AddInt64(&smap.mem, -freed)
+	}
+	return freed, isHit
 }
 
 // Walk applies fn to all key/value pairs in the shard, optionally locking for writing.
-func (shard *Shard[V]) Walk(ctx context.Context, fn func(uint64, V), lockWrite bool) {
-	if lockWrite {
+func (shard *Shard[V]) Walk(ctx context.Context, fn func(uint64, V) bool, lockRead bool) {
+	if lockRead {
 		shard.Lock()
 		defer shard.Unlock()
 	} else {
@@ -83,11 +75,20 @@ func (shard *Shard[V]) Walk(ctx context.Context, fn func(uint64, V), lockWrite b
 		defer shard.RUnlock()
 	}
 	for k, v := range shard.items {
+		v.IncRefCount()
+		releaser := NewReleaser(v, shard.releaserPool)
 		select {
 		case <-ctx.Done():
+			releaser.Release()
 			return
 		default:
-			fn(k, v)
+			ok := fn(k, v)
+			releaser.Release()
+			if !ok {
+				return
+			} else {
+				continue
+			}
 		}
 	}
 }
@@ -106,6 +107,10 @@ func (smap *Map[V]) WalkShards(fn func(key uint64, shard *Shard[V])) {
 	for k, s := range smap.shards {
 		go func(key uint64, shard *Shard[V]) {
 			defer wg.Done()
+
+			shard.Lock()
+			defer shard.Unlock()
+
 			fn(key, shard)
 		}(uint64(k), s)
 	}
@@ -113,9 +118,9 @@ func (smap *Map[V]) WalkShards(fn func(key uint64, shard *Shard[V])) {
 
 // Len returns the total number of elements in all shards (O(ShardCount)).
 func (smap *Map[V]) Len() int64 {
-	var length int64
-	for _, shard := range smap.shards {
-		length += atomic.LoadInt64(&shard.len)
-	}
-	return length
+	return atomic.LoadInt64(&smap.len)
+}
+
+func (smap *Map[V]) Mem() int64 {
+	return atomic.LoadInt64(&smap.mem)
 }

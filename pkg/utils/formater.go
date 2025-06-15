@@ -2,7 +2,7 @@ package utils
 
 import "fmt"
 
-func FmtMem(bytes uintptr) string {
+func FmtMem(bytes int64) string {
 	const (
 		KB = 1024
 		MB = KB * 1024

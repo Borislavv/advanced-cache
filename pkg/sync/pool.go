@@ -1,6 +1,7 @@
 package synced
 
 import (
+	"github.com/Borislavv/traefik-http-cache-plugin/pkg/types"
 	"sync"
 	"sync/atomic"
 )
@@ -15,7 +16,8 @@ const PreallocateBatchSize = 1024
 // - Minimize allocations by reusing objects.
 // - Reduce allocation spikes by preallocating objects in large batches.
 // - Provide simple Get/Put API similar to sync.Pool but with better bulk allocation behavior.
-type BatchPool[T any] struct {
+type BatchPool[T types.Sized] struct {
+	mem       int64      // bytes
 	len       int64      // Current number of objects ever preallocated (approximate)
 	pool      *sync.Pool // Underlying sync.Pool for thread-safe pooling
 	allocFunc func() T   // Function to create new T
@@ -24,7 +26,7 @@ type BatchPool[T any] struct {
 // NewBatchPool creates a new BatchPool with an initial preallocation.
 // - preallocateBatchSize: how many objects to add to the pool per allocation batch.
 // - allocFunc: function to construct a new T.
-func NewBatchPool[T any](preallocateBatchSize int, allocFunc func() T) *BatchPool[T] {
+func NewBatchPool[T types.Sized](preallocateBatchSize int, allocFunc func() T) *BatchPool[T] {
 	bp := &BatchPool[T]{allocFunc: allocFunc}
 	bp.pool = &sync.Pool{
 		New: func() any {
@@ -32,17 +34,14 @@ func NewBatchPool[T any](preallocateBatchSize int, allocFunc func() T) *BatchPoo
 			bp.preallocate(preallocateBatchSize)
 			atomic.AddInt64(&bp.len, int64(preallocateBatchSize))
 			// Return one object from the freshly preallocated batch.
-			return bp.pool.Get()
+			v := bp.pool.Get().(T)
+			atomic.AddInt64(&bp.len, v.Weight())
+			return v
 		},
 	}
 	// Initial larger preallocation for "warm start".
 	bp.preallocate(preallocateBatchSize * 10)
 	return bp
-}
-
-// Len returns the number of objects ever preallocated (does not track live/used count).
-func (bp *BatchPool[T]) Len() int {
-	return int(atomic.LoadInt64(&bp.len))
 }
 
 // preallocate fills the pool with n new objects using allocFunc.
@@ -55,10 +54,19 @@ func (bp *BatchPool[T]) preallocate(n int) {
 // Get retrieves an object from the pool, allocating if necessary.
 // Never returns nil (unless allocFunc does).
 func (bp *BatchPool[T]) Get() T {
-	return bp.pool.Get().(T)
+	v := bp.pool.Get().(T)
+	atomic.AddInt64(&bp.len, -1)
+	atomic.AddInt64(&bp.mem, -v.Weight())
+	return v
 }
 
 // Put returns an object to the pool for future reuse.
-func (bp *BatchPool[T]) Put(x T) {
-	bp.pool.Put(x)
+func (bp *BatchPool[T]) Put(v T) {
+	atomic.AddInt64(&bp.len, 1)
+	atomic.AddInt64(&bp.mem, v.Weight())
+	bp.pool.Put(v)
+}
+
+func (bp *BatchPool[T]) Mem() int64 {
+	return atomic.LoadInt64(&bp.mem)
 }
